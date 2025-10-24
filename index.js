@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import cors from "cors"
 import authRouter from './route/authRoute.js';
 import userRouter from './route/userRoute.js';
+import adminRequestRouter from './route/adminRequestRoute.js';
 
 
 dotenv.config();
@@ -22,6 +23,7 @@ app.use(cors({
 
 app.use("/api/auth",authRouter)
 app.use("/api/user",userRouter)
+app.use("/api/admin",adminRequestRouter)
 
 
 app.get('/', (req, res) => {

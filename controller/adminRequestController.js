@@ -132,3 +132,52 @@ export const rejectRequest = async (req, res) => {
     return res.status(500).json({ message: `Reject request error: ${error}` });
   }
 };
+
+// getting all requests 
+export const getAllUsers = async (req, res) => {
+  try {
+    
+    const users = await User.find({ _id: { $ne: req.userId } })
+                             .select("name username email role photoUrl createdAt")
+                             .sort({ createdAt: -1 }); 
+    return res.status(200).json(users);
+  } catch (error) {
+    return res.status(500).json({ message: `Get all users error: ${error.message}` });
+  }
+};
+
+// UPDATE USER ROLE (MASTER ONLY)
+export const updateUserRole = async (req, res) => {
+  try {
+    const { userId } = req.params; 
+    const { role } = req.body; 
+
+    // Validate the new role
+    if (!["user", "admin"].includes(role)) {
+      return res.status(400).json({ message: "Invalid role specified. Can only set to 'user' or 'admin'." });
+    }
+
+    // Prevent master from changing their own role via this endpoint
+    if (userId === req.userId) {
+       return res.status(400).json({ message: "Cannot change your own role here." });
+    }
+
+    const userToUpdate = await User.findById(userId);
+    if (!userToUpdate) {
+      return res.status(404).json({ message: "User not found" });
+    }
+     // Prevent changing another master's role
+    if (userToUpdate.role === 'master') {
+       return res.status(403).json({ message: "Cannot change the role of another master account." });
+    }
+
+    userToUpdate.role = role;
+    await userToUpdate.save();
+
+     const updatedUser = await User.findById(userId).select("-password");
+
+    return res.status(200).json({ message: `User role updated to ${role}`, user: updatedUser });
+  } catch (error) {
+    return res.status(500).json({ message: `Update user role error: ${error.message}` });
+  }
+};

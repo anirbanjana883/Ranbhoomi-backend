@@ -4,6 +4,31 @@ import bcrypt from "bcryptjs";
 import genToken from "../config/token.js";
 import sendMail from "../config/sendMail.js";
 
+
+const generateUsername = async (name) => {
+  let baseUsername = name
+    .toLowerCase()
+    .replace(/ /g, "-")
+    .replace(/[^a-z0-9-]/g, "");
+
+  let username = baseUsername;
+  let isUnique = false;
+
+  while (!isUnique) {
+    const existingUser = await User.findOne({ username: username });
+    if (!existingUser) {
+      // We found a unique name!
+      isUnique = true;
+    } else {
+      // If it exists, add a random 4-digit number and loop again to re-check
+      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+      username = `${baseUsername}-${randomSuffix}`;
+    }
+  }
+  return username;
+};
+
+
 // ------------------------ SIGNUP ------------------------
 export const signup = async (req, res) => {
   try {
@@ -18,9 +43,15 @@ export const signup = async (req, res) => {
     if (password.length < 8)
       return res.status(400).json({ message: "Enter strong password" });
 
+    if (!name) {
+      return res.status(400).json({ message: "Name is required" });
+    }
+    const username = await generateUsername(name);
+
     const hashPassword = await bcrypt.hash(password, 10);
     const user = await User.create({
       name,
+      username,
       email,
       password: hashPassword,
       role: "user",
@@ -40,7 +71,7 @@ export const signup = async (req, res) => {
       <div style="font-family: Arial, sans-serif; text-align:center; padding:20px;">
         <h2>Hello ${user.name},</h2>
         <p>Welcome to <strong>Ranbhoomi</strong>! Your account has been created successfully.</p>
-        <p>Get started with your learning journey and explore Ranbhoomim.</p>
+        <p>Get started with your learning journey and explore Ranbhoomi.</p>
         <p style="margin-top:20px; color:#6b7280;">- The Ranbhoomi Team</p>
       </div>`;
     const text = `Hello ${user.name}, welcome to Ranbhoomi! Your account has been created successfully.`;

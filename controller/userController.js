@@ -1,6 +1,7 @@
 
-import uploadOnCludinary from "../config/cloudinary.js";
+import uploadOnCloudinary from "../config/cloudinary.js";
 import User from "../models/userModel.js";
+import AdminRequest from "../models/adminRequestModel.js";
 
 // get current user
 export const getCurrentUser = async (req, res) => {
@@ -22,26 +23,77 @@ export const getCurrentUser = async (req, res) => {
 export const updateProfile = async (req, res) => {
   try {
     const userId = req.userId;
-    const { description, name } = req.body;
+    const { description, name, username, github, linkedin } = req.body;
     let photoUrl;
+
     if (req.file) {
-      // photoUrl = await uploadOnCludinary(req.file.path);
-      photoUrl = await uploadOnCludinary(req.file.path);
+
+      photoUrl = await uploadOnCloudinary(req.file.path); 
     }
-    // const user = await User.findById(userId, { name, description, photoUrl });
+
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
-    if (name) user.name = name;
-    if (description) user.description = description;
+
+    // Conditionally update each field
+    if (name !== undefined) user.name = name;
+    if (description !== undefined) user.description = description;
+    if (github !== undefined) user.github = github;
+    if (linkedin !== undefined) user.linkedin = linkedin;
     if (photoUrl) user.photoUrl = photoUrl;
-    if (!user.enrolledCourses) user.enrolledCourses = [];
-  
-    await user.save()
+
+    if (username && username !== user.username) {
+      const existingUser = await User.findOne({ username: username });
+      if (existingUser) {
+        return res.status(400).json({ message: "Username is already taken." });
+      }
+      user.username = username;
+    }
+
+    await user.save(); 
+
     const updatedUser = await User.findById(userId).select("-password");
     return res.status(200).json(updatedUser);
+
   } catch (error) {
+    // Handle potential duplicate username error
+    if (error.code === 11000 && error.keyPattern && error.keyPattern.username) {
+      return res.status(400).json({ message: "Username is already taken." });
+    }
     return res.status(500).json({ message: `Update profile error ${error}` });
+  }
+};
+
+// Get public user profile
+export const getUserProfile = async (req, res) => {
+  try {
+
+    const { username } = req.params; 
+    
+    const user = await User.findOne({ username: username }).select(
+
+      "name username description photoUrl github linkedin createdAt"
+    );
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const pendingRequest = await AdminRequest.findOne({ 
+      userId: user._id, 
+      status: 'pending' 
+    });
+
+    const userObj = user.toObject();
+    
+
+    userObj.adminRequestStatus = pendingRequest ? 'pending' : 'none';
+
+
+    return res.status(200).json(userObj); 
+
+  } catch (error) {
+    return res.status(500).json({ message: `GetUserProfile error ${error}` });
   }
 };

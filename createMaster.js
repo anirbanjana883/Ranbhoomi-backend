@@ -25,6 +25,7 @@ const createMaster = async () => {
 
     const masterUser = await User.create({
       name: "Master Account",
+      username: "masteradmin",
       email,
       password: hashedPassword,
       role: "master",
