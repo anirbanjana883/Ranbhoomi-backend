@@ -1,64 +1,79 @@
 import mongoose from "mongoose";
 
-const problemSchema = new mongoose.Schema(
-  {
-    name: {
-      type: String,
-      required: true,
-    },
-    username: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-      lowercase: true,
-    },
-    description: {
-      type: String,
-      default: "Welcome to my Ranbhoomi profile!", 
-    },
-    email: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-      lowercase: true,
-      immutable: true, 
-    },
-    password: {
-      type: String,
-    },
-    role: {
-      type: String,
-      enum: ["user", "admin", "master"], 
-      required: true,
-      default: "user", 
-    },
-    photoUrl: {
-      type: String,
-      default: "", 
-    },
 
-    github: {
-      type: String,
-      default: "",
+const starterCodeSchema = new mongoose.Schema({
+    language: {
+        type: String,
+        required: true,
+        trim: true,
     },
-    linkedin: {
-      type: String,
-      default: "",
+    code: {
+        type: String,
+        required: true,
     },
-    resetOtp: {
-      type: String,
+}, { _id: false });
+
+
+const problemSchema = new mongoose.Schema(
+    {
+
+        title: {
+            type: String,
+            required: [true, "Problem title is required."],
+            unique: true,
+            trim: true,
+        },
+        slug: {
+            type: String,
+            required: [true, "Problem slug is required."],
+            unique: true,
+            lowercase: true,
+            trim: true,
+        },
+        description: {
+            type: String,
+            required: [true, "Problem description is required."],
+        },
+        difficulty: {
+            type: String,
+            enum: ["Easy", "Medium", "Hard" , "Super Hard"],
+            required: [true, "Difficulty level is required."],
+        },
+
+        tags: [ 
+            {
+                type: String,
+                trim: true,
+                lowercase: true, 
+            },
+        ],
+        /*
+           Note: Validation that tags are from an allowed list should be
+           handled in the controller/service layer before saving.
+           Allowed tags can be defined in a separate config file or constant.
+        */
+       companyTags: [{ // Array of companies associated with the problem
+            type: String,
+            trim: true,
+            lowercase: true, // e.g., ["google", "amazon", "facebook"]
+        }],
+
+        starterCode: [starterCodeSchema],
+        testCases: [
+            {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "TestCase",
+            },
+        ],
+
+        solution: {
+            type: String,
+            default: "",
+        },
     },
-    otpExpires: {
-      type: Date,
-    },
-    isOtpVerified: {
-      type: Boolean,
-      default: false,
-    },
-  },
-  { timestamps: true }
+    {
+        timestamps: true,
+    }
 );
 
 const Problem = mongoose.model("Problem", problemSchema);
