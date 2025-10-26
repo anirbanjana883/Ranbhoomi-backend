@@ -3,27 +3,30 @@ import {
     getAllProblems,
     getProblemBySlug,
     createProblem,
-    updateProblem,
+    updateProblem, 
     deleteProblem,
+    addTestCaseToProblem,      
+    deleteTestCaseFromProblem,
+    getAllTestCasesForProblem, 
 } from "../controller/problemController.js";
-import isAuth from "../middleware/isAuth.js"; 
+import isAuth from "../middleware/isAuth.js";
 import isAdmin from "../middleware/isAdmin.js"; 
 
 const problemRouter = express.Router();
 
-// --- Public Routes ---
 
 problemRouter.get("/getallproblem", getAllProblems);
-
 problemRouter.get("/getoneproblem/:slug", getProblemBySlug);
 
-// --- Protected Routes (Admin or Master Only) ---
 
 problemRouter.post("/createproblem", isAuth, isAdmin, createProblem);
-
-problemRouter.put("/updateproblem/:slug", isAuth, isAdmin, updateProblem);
-
+problemRouter.put("/updateproblem/:slug", isAuth, isAdmin, updateProblem); 
 problemRouter.delete("/deleteproblem/:slug", isAuth, isAdmin, deleteProblem);
+
+
+problemRouter.get("/:slug/alltestcases", isAuth, isAdmin, getAllTestCasesForProblem);
+problemRouter.post("/:slug/testcases", isAuth, isAdmin, addTestCaseToProblem);
+problemRouter.delete("/testcases/:testCaseId", isAuth, isAdmin, deleteTestCaseFromProblem);
 
 
 export default problemRouter;

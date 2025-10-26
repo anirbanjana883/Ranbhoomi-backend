@@ -47,15 +47,11 @@ const problemSchema = new mongoose.Schema(
                 lowercase: true, 
             },
         ],
-        /*
-           Note: Validation that tags are from an allowed list should be
-           handled in the controller/service layer before saving.
-           Allowed tags can be defined in a separate config file or constant.
-        */
-       companyTags: [{ // Array of companies associated with the problem
+
+       companyTags: [{ 
             type: String,
             trim: true,
-            lowercase: true, // e.g., ["google", "amazon", "facebook"]
+            lowercase: true, 
         }],
 
         starterCode: [starterCodeSchema],
@@ -69,6 +65,12 @@ const problemSchema = new mongoose.Schema(
         solution: {
             type: String,
             default: "",
+        },
+
+        isPremium: {
+            type: Boolean,
+            default: false, // Problems are not premium by default
+            required: true,
         },
     },
     {
