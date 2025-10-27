@@ -51,6 +51,21 @@ const submissionSchema = new mongoose.Schema(
             default: 'Pending',
             required: true,
         },
+
+        
+        judge0Tokens: [
+            {
+                token: { type: String, required: true }
+            }
+        ],
+
+        testCases: [
+            {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "TestCase"
+            }
+        ],
+
         results: [testResultSchema],
     },
     {

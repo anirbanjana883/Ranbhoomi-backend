@@ -8,6 +8,7 @@ import userRouter from './route/userRoute.js';
 import adminRequestRouter from './route/adminRequestRoute.js';
 import problemRouter from './route/problemRoute.js';
 import tagRouter from './route/tagRoutes.js';
+import submissionRouter from './route/submissionRoutes.js';
 
 
 dotenv.config();
@@ -28,6 +29,7 @@ app.use("/api/user",userRouter)
 app.use("/api/admin",adminRequestRouter)
 app.use("/api/problems",problemRouter)
 app.use('/api/tags', tagRouter);
+app.use('/api/submissions', submissionRouter);
 
 
 app.get('/', (req, res) => {

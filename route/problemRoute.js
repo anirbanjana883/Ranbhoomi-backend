@@ -7,7 +7,8 @@ import {
     deleteProblem,
     addTestCaseToProblem,      
     deleteTestCaseFromProblem,
-    getAllTestCasesForProblem, 
+    getAllTestCasesForProblem,
+    getProblemSolution, 
 } from "../controller/problemController.js";
 import isAuth from "../middleware/isAuth.js";
 import isAdmin from "../middleware/isAdmin.js"; 
@@ -27,6 +28,9 @@ problemRouter.delete("/deleteproblem/:slug", isAuth, isAdmin, deleteProblem);
 problemRouter.get("/:slug/alltestcases", isAuth, isAdmin, getAllTestCasesForProblem);
 problemRouter.post("/:slug/testcases", isAuth, isAdmin, addTestCaseToProblem);
 problemRouter.delete("/testcases/:testCaseId", isAuth, isAdmin, deleteTestCaseFromProblem);
+
+
+problemRouter.get("/getoneproblem/:slug/solution", isAuth, getProblemSolution);
 
 
 export default problemRouter;

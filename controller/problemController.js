@@ -1,6 +1,8 @@
 import mongoose from "mongoose"; 
 import Problem from "../models/problemModel.js";
 import TestCase from "../models/testCaseModel.js";
+import Submission from "../models/submissionModel.js"; 
+import User from "../models/userModel.js";
 
 import {
   ALLOWED_PROBLEM_TAGS,
@@ -10,7 +12,6 @@ import {
   ALLOWED_COMPANY_TAGS,
   normalizeCompanyTag,
 } from "../config/companyTags.js";
-import Submission from "../models/submissionModel.js"; 
 
 
 
@@ -451,4 +452,49 @@ export const deleteTestCaseFromProblem = async (req, res) => {
       .status(500)
       .json({ message: `Error deleting test case: ${error.message}` });
   }
+};
+
+
+// --- GET PROBLEM SOLUTION ---------
+
+export const getProblemSolution = async (req, res) => {
+    try {
+        const { slug } = req.params;
+        const userId = req.userId; // from isAuth
+
+        // 1. Find the user and problem
+        const user = await User.findById(userId).select("role");
+        if (!user) return res.status(401).json({ message: "User not found." });
+
+        const problem = await Problem.findOne({ slug }).select("_id solution");
+        if (!problem) return res.status(404).json({ message: "Problem not found." });
+
+        // 2. Check for Admin/Master role
+        if (user.role === 'admin' || user.role === 'master') {
+            return res.status(200).json({ solution: problem.solution });
+        }
+
+        // 3. Check if user has an 'Accepted' submission for this problem
+        const acceptedSubmission = await Submission.findOne({
+            problem: problem._id,
+            user: userId,
+            status: 'Accepted'
+        });
+
+        if (acceptedSubmission) {
+            return res.status(200).json({ solution: problem.solution });
+        }
+
+        // 4. (Future Check) Check for premium subscription
+        // if (user.isPremium) {
+        //     return res.status(200).json({ solution: problem.solution });
+        // }
+
+        // 5. If none of the above, deny access
+        return res.status(403).json({ message: "You must successfully solve this problem to view the solution." });
+
+    } catch (error) {
+        console.error("Error fetching solution:", error);
+        return res.status(500).json({ message: `Error fetching solution: ${error.message}` });
+    }
 };
