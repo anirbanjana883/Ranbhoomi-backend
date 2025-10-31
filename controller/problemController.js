@@ -1,7 +1,7 @@
-import mongoose from "mongoose"; 
+import mongoose from "mongoose";
 import Problem from "../models/problemModel.js";
 import TestCase from "../models/testCaseModel.js";
-import Submission from "../models/submissionModel.js"; 
+import Submission from "../models/submissionModel.js";
 import User from "../models/userModel.js";
 
 import {
@@ -13,13 +13,13 @@ import {
   normalizeCompanyTag,
 } from "../config/companyTags.js";
 
-
-
 // --- GET ALL PROBLEMS (with filtering) ---
 export const getAllProblems = async (req, res) => {
   try {
     const { difficulty, tags, company, search } = req.query;
-    const filter = {};
+    const filter = {
+      isPublished: true,
+    };
 
     if (
       difficulty &&
@@ -48,6 +48,41 @@ export const getAllProblems = async (req, res) => {
     return res
       .status(500)
       .json({ message: `Error fetching problems: ${error.message}` });
+  }
+};
+
+// --- GET ALL PROBLEMS (with filtering) for admin only ---
+export const getAllProblemsAdmin = async (req, res) => {
+  try {
+    const { difficulty, tags, company, search } = req.query;
+
+    const filter = {}; 
+
+    if (difficulty && ["Easy", "Medium", "Hard", "Super Hard"].includes(difficulty)) {
+      filter.difficulty = difficulty;
+    }
+    if (tags) {
+      const tagsArray = tags.split(",").map((tag) => tag.trim().toLowerCase());
+      filter.tags = { $all: tagsArray };
+    }
+    if (company) {
+      filter.companyTags = company.trim().toLowerCase();
+    }
+    if (search) {
+      filter.title = { $regex: search, $options: "i" };
+    }
+
+    const problems = await Problem.find(filter)
+      // --- SELECT "isPublished" FOR THE TABLE ---
+      .select("title slug difficulty tags companyTags createdAt isPremium isPublished")
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json(problems);
+  } catch (error) {
+    console.error("Error fetching admin problems:", error);
+    return res
+      .status(500)
+      .json({ message: `Error fetching admin problems: ${error.message}` });
   }
 };
 
@@ -90,6 +125,8 @@ export const createProblem = async (req, res) => {
       testCasesData,
       solution,
       isPremium,
+      isPublished,
+      originContest,
     } = req.body;
 
     // Basic Validation
@@ -162,6 +199,8 @@ export const createProblem = async (req, res) => {
       solution: solution || "",
       isPremium: isPremium || false,
       testCases: [],
+      isPublished: isPublished,
+      originContest: originContest || null,
     });
     await newProblem.save({ session });
 
@@ -179,6 +218,14 @@ export const createProblem = async (req, res) => {
     // Link TestCases back to Problem
     newProblem.testCases = createdTestCases.map((tc) => tc._id);
     await newProblem.save({ session });
+
+    if (originContest && isPublished === false) {
+      await Contest.findByIdAndUpdate(
+        originContest,
+        { $push: { problems: { problem: newProblem._id } } },
+        { session }
+      );
+    }
 
     // Commit Transaction
     await session.commitTransaction();
@@ -225,6 +272,7 @@ export const updateProblem = async (req, res) => {
       starterCode,
       solution,
       isPremium,
+      isPublished
     } = req.body;
     const problem = await Problem.findOne({ slug: slug }).session(session);
     if (!problem) throw new Error("Problem not found with this slug.");
@@ -281,8 +329,11 @@ export const updateProblem = async (req, res) => {
     if (difficulty !== undefined) problem.difficulty = difficulty;
     if (starterCode !== undefined) problem.starterCode = starterCode;
     if (solution !== undefined) problem.solution = solution;
-    if (isPremium !== undefined) { 
-        problem.isPremium = Boolean(isPremium);
+    if (isPremium !== undefined) {
+      problem.isPremium = Boolean(isPremium);
+    }
+    if (isPublished !== undefined) {
+      problem.isPublished = Boolean(isPublished); 
     }
 
     await problem.save({ session });
@@ -352,24 +403,25 @@ export const deleteProblem = async (req, res) => {
 
 // get all testcase for a perticular problem
 export const getAllTestCasesForProblem = async (req, res) => {
-    const { slug } = req.params;
-    try {
-        // Find the problem first to get its ID
-        const problem = await Problem.findOne({ slug }).select("_id"); 
-        if (!problem) {
-            return res.status(404).json({ message: "Problem not found." });
-        }
-
-        const testCases = await TestCase.find({ problem: problem._id })
-                                        .select("input expectedOutput isSample createdAt") 
-                                        .sort({ createdAt: 1 }); 
-
-        return res.status(200).json(testCases);
-
-    } catch (error) {
-        console.error("Error fetching all test cases for problem:", error);
-        return res.status(500).json({ message: `Error fetching test cases: ${error.message}` });
+  const { slug } = req.params;
+  try {
+    // Find the problem first to get its ID
+    const problem = await Problem.findOne({ slug }).select("_id");
+    if (!problem) {
+      return res.status(404).json({ message: "Problem not found." });
     }
+
+    const testCases = await TestCase.find({ problem: problem._id })
+      .select("input expectedOutput isSample createdAt")
+      .sort({ createdAt: 1 });
+
+    return res.status(200).json(testCases);
+  } catch (error) {
+    console.error("Error fetching all test cases for problem:", error);
+    return res
+      .status(500)
+      .json({ message: `Error fetching test cases: ${error.message}` });
+  }
 };
 
 // --- ADD TEST CASE TO PROBLEM (Admin/Master Only) ---
@@ -430,7 +482,7 @@ export const deleteTestCaseFromProblem = async (req, res) => {
       session
     );
     if (!testCase) {
-      await session.commitTransaction(); 
+      await session.commitTransaction();
       session.endSession();
       return res.status(404).json({ message: "Test case not found." });
     }
@@ -454,47 +506,52 @@ export const deleteTestCaseFromProblem = async (req, res) => {
   }
 };
 
-
 // --- GET PROBLEM SOLUTION ---------
-
 export const getProblemSolution = async (req, res) => {
-    try {
-        const { slug } = req.params;
-        const userId = req.userId; // from isAuth
+  try {
+    const { slug } = req.params;
+    const userId = req.userId; // from isAuth
 
-        // 1. Find the user and problem
-        const user = await User.findById(userId).select("role");
-        if (!user) return res.status(401).json({ message: "User not found." });
+    // 1. Find the user and problem
+    const user = await User.findById(userId).select("role");
+    if (!user) return res.status(401).json({ message: "User not found." });
 
-        const problem = await Problem.findOne({ slug }).select("_id solution");
-        if (!problem) return res.status(404).json({ message: "Problem not found." });
+    const problem = await Problem.findOne({ slug }).select("_id solution");
+    if (!problem)
+      return res.status(404).json({ message: "Problem not found." });
 
-        // 2. Check for Admin/Master role
-        if (user.role === 'admin' || user.role === 'master') {
-            return res.status(200).json({ solution: problem.solution });
-        }
-
-        // 3. Check if user has an 'Accepted' submission for this problem
-        const acceptedSubmission = await Submission.findOne({
-            problem: problem._id,
-            user: userId,
-            status: 'Accepted'
-        });
-
-        if (acceptedSubmission) {
-            return res.status(200).json({ solution: problem.solution });
-        }
-
-        // 4. (Future Check) Check for premium subscription
-        // if (user.isPremium) {
-        //     return res.status(200).json({ solution: problem.solution });
-        // }
-
-        // 5. If none of the above, deny access
-        return res.status(403).json({ message: "You must successfully solve this problem to view the solution." });
-
-    } catch (error) {
-        console.error("Error fetching solution:", error);
-        return res.status(500).json({ message: `Error fetching solution: ${error.message}` });
+    // 2. Check for Admin/Master role
+    if (user.role === "admin" || user.role === "master") {
+      return res.status(200).json({ solution: problem.solution });
     }
+
+    // 3. Check if user has an 'Accepted' submission for this problem
+    const acceptedSubmission = await Submission.findOne({
+      problem: problem._id,
+      user: userId,
+      status: "Accepted",
+    });
+
+    if (acceptedSubmission) {
+      return res.status(200).json({ solution: problem.solution });
+    }
+
+    // 4. (Future Check) Check for premium subscription
+    // if (user.isPremium) {
+    //     return res.status(200).json({ solution: problem.solution });
+    // }
+
+    // 5. If none of the above, deny access
+    return res
+      .status(403)
+      .json({
+        message:
+          "You must successfully solve this problem to view the solution.",
+      });
+  } catch (error) {
+    console.error("Error fetching solution:", error);
+    return res
+      .status(500)
+      .json({ message: `Error fetching solution: ${error.message}` });
+  }
 };

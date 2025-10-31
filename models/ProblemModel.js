@@ -69,8 +69,18 @@ const problemSchema = new mongoose.Schema(
 
         isPremium: {
             type: Boolean,
-            default: false, // Problems are not premium by default
+            default: false, 
             required: true,
+        },
+        isPublished: {
+            type: Boolean,
+            default: true, 
+            index: true,
+        },
+        originContest: { 
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Contest',
+            default: null,
         },
     },
     {
