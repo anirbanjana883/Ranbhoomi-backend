@@ -49,6 +49,11 @@ const contestSchema = new mongoose.Schema(
             ref: 'User',
             required: true,
         },
+        problemsPublished: {
+            type: Boolean,
+            default: false,
+            index: true,
+        },
         // We'll add rankings later, maybe as a separate model
         // rankings: [ ... ]
     },

@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import connectDb from './config/connectDB.js';
 import cookieParser from 'cookie-parser';
 import cors from "cors"
+import cron from "node-cron";
 import authRouter from './route/authRoute.js';
 import userRouter from './route/userRoute.js';
 import adminRequestRouter from './route/adminRequestRoute.js';
@@ -36,11 +37,37 @@ app.use('/api/contests', contestRouter);
 app.use('/api/contest-submissions', contestSubmissionRouter);
 
 
+
 app.get('/', (req, res) => {
     res.send('Hello from RANBHOOMI ')
 })
 
-app.listen(port,() =>{
-    console.log(`Server is running on port : ${port}`)
-    connectDb()
-})
+
+// --- auto update unppublished problem to published  ---
+const startServer = async () => {
+    try {
+        await connectDb(); 
+
+        
+        app.listen(port, () => {
+            console.log(`Server is running on port : ${port}`);
+
+            cron.schedule("30 * * * *", () => {
+                console.log("Scheduler: Checking for contests to publish...");
+                publishEndedContestProblems();
+            });
+            console.log("Scheduled contest publisher to run hourly.");
+        });
+
+    } catch (error) {
+        console.error("Failed to start server:", error);
+        process.exit(1); 
+    }
+};
+
+startServer();
+
+// app.listen(port,() =>{
+//     console.log(`Server is running on port : ${port}`)
+//     connectDb()
+// })
