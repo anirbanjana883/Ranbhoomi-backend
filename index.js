@@ -4,6 +4,7 @@ import connectDb from './config/connectDB.js';
 import cookieParser from 'cookie-parser';
 import cors from "cors"
 import cron from "node-cron";
+import { publishEndedContestProblems } from "./services/contestPublisher.js";
 import authRouter from './route/authRoute.js';
 import userRouter from './route/userRoute.js';
 import adminRequestRouter from './route/adminRequestRoute.js';

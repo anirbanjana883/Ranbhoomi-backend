@@ -1,9 +1,11 @@
 import express from "express";
 import {
+    calculateRanking,
     createContest,
     deleteContest,
     getAllContests,
     getContestDetails, 
+    getRanking, 
     registerForContest,
     updateContest, 
 } from "../controller/contestController.js"; 
@@ -23,6 +25,10 @@ contestRouter.post("/", isAuth, isAdmin, createContest);
 contestRouter.put("/:slug", isAuth, isAdmin, updateContest);
 
 contestRouter.delete("/:slug", isAuth, isAdmin, deleteContest);
+
+contestRouter.post("/:slug/calculate", isAuth, isAdmin, calculateRanking); 
+
+contestRouter.get("/:slug/ranking", getRanking);
 
 // --- User Routes  ---
 

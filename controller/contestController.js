@@ -1,5 +1,7 @@
 import Contest from "../models/contestModel.js";
 import Problem from "../models/problemModel.js"; 
+import ContestSubmission from "../models/contestSubmissionModel.js"; 
+import ContestRanking from "../models/contestRankingModel.js";
 import mongoose from "mongoose"
 
 // --- CREATE CONTEST (Admin/Master Only) ---
@@ -267,5 +269,186 @@ export const updateContest = async (req, res) => {
         session.endSession();
         console.error("Error updating contest:", error);
         return res.status(500).json({ message: `Error updating contest: ${error.message}` });
+    }
+};
+
+// --- CALCULATE RANKING (Admin/Master Only) ---
+export const calculateRanking = async (req, res) => {
+    const { slug } = req.params;
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        const contest = await Contest.findOne({ slug: slug }).session(session);
+        if (!contest) {
+            await session.abortTransaction(); session.endSession();
+            return res.status(404).json({ message: "Contest not found." });
+        }
+
+        //  Check if contest has actually ended
+        if (new Date(contest.endTime) > new Date()) {
+            return res.status(400).json({ message: "Contest has not ended yet." });
+        }
+
+        // Check if ranking is already calculated
+        const existingRanking = await ContestRanking.findOne({ contest: contest._id }).session(session);
+        if (existingRanking) {
+            await session.commitTransaction(); session.endSession();
+            return res.status(200).json(existingRanking);
+        }
+
+        // --- Start Calculation ---
+        const submissions = await ContestSubmission.find({ contest: contest._id })
+            .select("user problem status createdAt")
+            .sort({ createdAt: 'asc' })
+            .session(session);
+
+        const contestStartTime = new Date(contest.startTime).getTime();
+        const penaltyPerWrongSubmission = 20; 
+
+        //  Process submissions user by user
+        const userScores = new Map(); // Map<userId, { totalScore, totalPenalty, problemResults, user }>
+
+        for (const sub of submissions) {
+            const userId = sub.user.toString();
+            const problemId = sub.problem.toString();
+            
+            
+            if (!userScores.has(userId)) {
+                userScores.set(userId, {
+                    user: sub.user,
+                    totalScore: 0,
+                    totalPenalty: 0,
+                    problemResults: new Map() // Map<problemId, { penalty, submissionTime, status }>
+                });
+            }
+
+            const userData = userScores.get(userId);
+
+            // If this problem is already 'Accepted', ignore subsequent submissions for it
+            if (userData.problemResults.has(problemId) && userData.problemResults.get(problemId).status === 'Accepted') {
+                continue;
+            }
+
+            const submissionTimeInMinutes = (new Date(sub.createdAt).getTime() - contestStartTime) / (1000 * 60);
+
+            if (sub.status === 'Accepted') {
+                // First time this problem is accepted
+                const currentPenalty = userData.problemResults.get(problemId)?.penalty || 0;
+                const finalPenalty = currentPenalty + submissionTimeInMinutes;
+
+                userData.problemResults.set(problemId, {
+                    status: 'Accepted',
+                    submissionTime: submissionTimeInMinutes,
+                    penalty: finalPenalty
+                });
+
+            } else if (sub.status !== 'Judging' && sub.status !== 'Pending') {
+                // This is a 'Wrong Answer', 'TLE', 'Runtime Error', etc.
+                const currentPenalty = userData.problemResults.get(problemId)?.penalty || 0;
+                
+                userData.problemResults.set(problemId, {
+                    status: 'Attempted',
+                    submissionTime: submissionTimeInMinutes,
+                    penalty: currentPenalty + penaltyPerWrongSubmission 
+                });
+            }
+        }
+
+        //  Format and Sort Rankings
+        let rankingsArray = [];
+        for (const [userId, data] of userScores.entries()) {
+            let userTotalScore = 0;
+            let userTotalPenalty = 0;
+            let formattedProblemResults = [];
+
+            // Calculate totals from the processed problemResults map
+            for(const [problemId, result] of data.problemResults.entries()) {
+                if(result.status === 'Accepted') {
+                    userTotalScore += 1; 
+                    userTotalPenalty += result.penalty;
+                    formattedProblemResults.push({
+                        problem: problemId,
+                        status: 'Accepted',
+                        submissionTime: result.submissionTime,
+                        penalty: result.penalty
+                    });
+                }
+            }
+
+            if (userTotalScore > 0) { // Only add users who solved at least one problem
+                rankingsArray.push({
+                    user: data.user,
+                    totalScore: userTotalScore,
+                    totalPenalty: userTotalPenalty,
+                    problemResults: formattedProblemResults
+                });
+            }
+        }
+
+        // Sort: 1. By score (descending), 2. By penalty (ascending)
+        rankingsArray.sort((a, b) => {
+            if (a.totalScore !== b.totalScore) {
+                return b.totalScore - a.totalScore;
+            }
+            return a.totalPenalty - b.totalPenalty;
+        });
+
+        // Assign ranks
+        const finalRankings = rankingsArray.map((entry, index) => ({
+            ...entry,
+            rank: index + 1
+        }));
+
+        // 4. Save to DB
+        const newRanking = new ContestRanking({
+            contest: contest._id,
+            rankings: finalRankings,
+            calculatedAt: new Date()
+        });
+        await newRanking.save({ session });
+
+        await session.commitTransaction();
+        session.endSession();
+        
+        return res.status(201).json(newRanking);
+
+    } catch (error) {
+        await session.abortTransaction();
+        session.endSession();
+        console.error("Error calculating ranking:", error);
+        return res.status(500).json({ message: `Error calculating ranking: ${error.message}` });
+    }
+};
+
+// --- GET RANKING (Public) ---
+export const getRanking = async (req, res) => {
+    try {
+        const { slug } = req.params;
+        const contest = await Contest.findOne({ slug: slug }).select("_id");
+        if (!contest) {
+            return res.status(404).json({ message: "Contest not found." });
+        }
+
+        // Find the calculated ranking
+        const ranking = await ContestRanking.findOne({ contest: contest._id })
+            .populate({
+                path: 'rankings.user', 
+                select: 'name username photoUrl' 
+            })
+            .populate({
+                path: 'rankings.problemResults.problem', 
+                select: 'title slug' 
+            });
+            
+        if (!ranking) {
+            return res.status(404).json({ message: "Ranking for this contest has not been calculated yet." });
+        }
+
+        return res.status(200).json(ranking);
+
+    } catch (error) {
+        console.error("Error fetching ranking:", error);
+        return res.status(500).json({ message: `Error fetching ranking: ${error.message}` });
     }
 };
