@@ -17,7 +17,8 @@ import isAdmin from "../middleware/isAdmin.js";
 const problemRouter = express.Router();
 
 
-problemRouter.get("/getallproblem", getAllProblems); // for all user 
+problemRouter.get("/getallproblem", getAllProblems); 
+problemRouter.get("/", isAuth, getAllProblems);
 problemRouter.get("/getoneproblem/:slug", getProblemBySlug);
 
 // get all problem for admin only 
