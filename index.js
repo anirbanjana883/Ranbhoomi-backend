@@ -16,8 +16,8 @@ import contestSubmissionRouter from "./route/contestSubmissionRoute.js";
 import interviewRouter from "./route/interviewRoute.js";
 import http from "http";
 import { Server } from "socket.io";
-import InterviewSession from './models/interviewSessionModel.js';
-import Problem from './models/problemModel.js';
+import InterviewSession from "./models/interviewSessionModel.js";
+import Problem from "./models/problemModel.js";
 
 dotenv.config();
 
@@ -60,83 +60,89 @@ app.get("/", (req, res) => {
 
 // This is the "phone operator"
 io.on("connection", (socket) => {
-  console.log(`Socket connected: ${socket.id}`);
+  console.log(`⚡ Connected: ${socket.id}`);
 
-  // When a user enters the interview room page
+  socket.onAny((event, payload) => {
+    console.log(`📨 Event: ${event}`, payload?.roomID || "");
+  });
+
   socket.on("join-room", (roomID) => {
-    socket.join(roomID);
-    // console.log(`User ${socket.id} joined room ${roomID}`);
+    if (!roomID) return;
+    if (Array.from(socket.rooms).includes(roomID)) return; // ✅ already joined
 
+    socket.join(roomID);
+    console.log(`📡 ${socket.id} joined room ${roomID}`);
     socket.to(roomID).emit("user-joined", { socketId: socket.id });
   });
 
-  // WebRTC Signaling: A user sends an "offer"
-  socket.on("offer", (payload) => {
-    // console.log(`Offer from ${socket.id} to ${payload.target}`);
-    io.to(payload.target).emit("offer-received", {
-      offer: payload.offer,
+  // --- WebRTC Signaling ---
+  socket.on("offer", ({ target, offer }) => {
+    io.to(target).emit("offer-received", { sender: socket.id, offer });
+  });
+
+  socket.on("answer", ({ target, answer }) => {
+    io.to(target).emit("answer-received", { sender: socket.id, answer });
+  });
+
+  socket.on("ice-candidate", ({ target, candidate }) => {
+    io.to(target).emit("ice-candidate-received", {
       sender: socket.id,
+      candidate,
     });
   });
 
-  // WebRTC Signaling: A user sends an "answer"
-  socket.on("answer", (payload) => {
-    // console.log(`Answer from ${socket.id} to ${payload.target}`);
-    io.to(payload.target).emit("answer-received", {
-      answer: payload.answer,
-      sender: socket.id,
-    });
+  // --- Sync events (tabs, code, etc.) ---
+  socket.on("tab-change", ({ roomID, tab }) => {
+    socket.to(roomID).emit("tab-changed", { tab });
   });
 
-  // WebRTC Signaling: Passing connection candidates
-  socket.on("ice-candidate", (payload) => {
-    socket.to(payload.target).emit("ice-candidate-received", {
-      candidate: payload.candidate,
-      sender: socket.id,
-    });
+  socket.on("code-change", ({ roomID, code }) => {
+    socket.to(roomID).emit("code-changed", { code });
   });
 
-  // Handle user leaving
-  socket.on("disconnect", () => {
-    console.log(`Socket disconnected: ${socket.id}`);
-    // We can emit a 'user-left' event here later
+  socket.on("language-change", ({ roomID, language }) => {
+    socket.to(roomID).emit("language-changed", { language });
   });
 
-  socket.on("tab-change", (payload) => {
-    // Send the active tab to everyone else in the room
-    socket.to(payload.roomID).emit("tab-changed", {
-      tab: payload.tab,
-    });
-  });
-
-  socket.on('select-problem', async (payload) => {
+  socket.on("select-problem", async ({ roomID, problemId }) => {
     try {
-      const { roomID, problemId } = payload;
-      
-      // Find the problem and populate its sample test cases
       const problem = await Problem.findById(problemId).populate({
         path: "testCases",
         match: { isSample: true },
         select: "input expectedOutput _id",
       });
 
-      if (!problem) {
-        // Handle error (e.g., emit back to sender)
-        return;
-      }
-      
-      // Update the session in the database
+      if (!problem) return;
+
       await InterviewSession.findOneAndUpdate(
-        { roomID: roomID },
+        { roomID },
         { problem: problemId }
       );
-      
-      // Broadcast the *full problem object* to everyone in the room
-      io.to(roomID).emit('problem-selected', { problem: problem });
 
-    } catch (error) {
-      console.error("Error selecting problem:", error);
+      io.to(roomID).emit("problem-selected", { problem });
+    } catch (err) {
+      console.error("❌ Error selecting problem:", err);
     }
+  });
+
+  socket.on("tldraw-changed", (payload) => {
+    // Just relay the snapshot to everyone else in the room
+    socket.to(payload.roomID).emit("tldraw-update", { 
+      snapshot: payload.snapshot 
+    });
+  });
+
+  socket.on("tldraw-cursor", (payload) => {
+    // Just relay the cursor data to everyone else in the room
+    socket.to(payload.roomID).emit("tldraw-cursor-update", {
+      socketId: socket.id,
+      cursor: payload.cursor
+    });
+  });
+
+
+  socket.on("disconnect", () => {
+    console.log(`❌ Socket disconnected: ${socket.id}`);
   });
 });
 
