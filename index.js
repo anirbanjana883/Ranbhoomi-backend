@@ -104,7 +104,8 @@ io.on("connection", (socket) => {
     socket.to(roomID).emit("language-changed", { language });
   });
 
-  socket.on("select-problem", async ({ roomID, problemId }) => {
+socket.on("select-problem", async ({ roomID, problemId }) => {
+    console.log(`[Socket] Event: 'select-problem' received for room ${roomID}`); // <-- ADD THIS
     try {
       const problem = await Problem.findById(problemId).populate({
         path: "testCases",
@@ -112,16 +113,21 @@ io.on("connection", (socket) => {
         select: "input expectedOutput _id",
       });
 
-      if (!problem) return;
+      if (!problem) {
+        console.error("❌ Error: Problem not found with ID:", problemId); // <-- ADD THIS
+        return;
+      }
 
       await InterviewSession.findOneAndUpdate(
         { roomID },
         { problem: problemId }
       );
 
+      console.log(`[Socket] Event: 'problem-selected' emitting to room ${roomID}`); // <-- ADD THIS
       io.to(roomID).emit("problem-selected", { problem });
+
     } catch (err) {
-      console.error("❌ Error selecting problem:", err);
+      console.error("❌ FATAL ERROR selecting problem:", err); // <-- This will catch crashes
     }
   });
 
