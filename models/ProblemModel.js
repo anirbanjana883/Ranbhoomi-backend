@@ -55,6 +55,12 @@ const problemSchema = new mongoose.Schema(
         }],
 
         starterCode: [starterCodeSchema],
+        driverCode: [
+            {
+                language: { type: String, required: true },
+                code: { type: String, required: true }
+            }
+        ],
         testCases: [
             {
                 type: mongoose.Schema.Types.ObjectId,

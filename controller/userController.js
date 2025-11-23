@@ -97,3 +97,23 @@ export const getUserProfile = async (req, res) => {
     return res.status(500).json({ message: `GetUserProfile error ${error}` });
   }
 };
+
+// Find all accepted submissions for this user
+export const getSolvedProblems = async (req, res) => {
+  try {
+    // Find all accepted submissions for this user
+    const submissions = await Submission.find({ 
+      user: req.userId, 
+      status: "Accepted" 
+    }).select("problem");
+
+    // Extract just the problem IDs and make them unique
+    // (User might have solved the same problem twice)
+    const solvedProblemIds = [...new Set(submissions.map(s => s.problem.toString()))];
+
+    res.status(200).json(solvedProblemIds);
+  } catch (error) {
+    console.error("Error fetching solved problems:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};

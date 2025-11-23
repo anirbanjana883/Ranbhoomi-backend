@@ -14,6 +14,7 @@ import submissionRouter from "./route/submissionRoutes.js";
 import contestRouter from "./route/contestRoutes.js";
 import contestSubmissionRouter from "./route/contestSubmissionRoute.js";
 import interviewRouter from "./route/interviewRoute.js";
+import commentRouter from "./route/commentRoute.js";
 import http from "http";
 import { Server } from "socket.io";
 import InterviewSession from "./models/interviewSessionModel.js";
@@ -53,6 +54,7 @@ app.use("/api/submissions", submissionRouter);
 app.use("/api/contests", contestRouter);
 app.use("/api/contest-submissions", contestSubmissionRouter);
 app.use("/api/interview", interviewRouter);
+app.use('/api/comments', commentRouter);
 
 app.get("/", (req, res) => {
   res.send("Hello from RANBHOOMI ");
@@ -104,7 +106,7 @@ io.on("connection", (socket) => {
     socket.to(roomID).emit("language-changed", { language });
   });
 
-socket.on("select-problem", async ({ roomID, problemId }) => {
+  socket.on("select-problem", async ({ roomID, problemId }) => {
     console.log(`[Socket] Event: 'select-problem' received for room ${roomID}`); // <-- ADD THIS
     try {
       const problem = await Problem.findById(problemId).populate({

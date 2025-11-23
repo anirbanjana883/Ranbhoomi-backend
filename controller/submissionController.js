@@ -33,18 +33,34 @@ export const createSubmission = async (req, res) => {
             return res.status(400).json({ message: `Language '${language}' is not supported.` });
         }
 
-        // 2. Find Problem and ALL its Test Cases (hidden + sample)
-        const problem = await Problem.findOne({ slug: slug }).select("_id");
+        // 2. Find Problem (Fetch _id AND driverCode)
+        const problem = await Problem.findOne({ slug: slug }).select("_id driverCode");
         if (!problem) {
             return res.status(404).json({ message: "Problem not found." });
         }
+
+        // --- NEW: Handle Hidden Driver Code ---
+        let finalSubmissionCode = code;
+        
+        if (problem.driverCode && problem.driverCode.length > 0) {
+            const driver = problem.driverCode.find(
+                (dc) => dc.language.toLowerCase() === language.toLowerCase()
+            );
+            
+            if (driver) {
+                // Merge User Code + Driver Code
+                finalSubmissionCode = `${code}\n\n${driver.code}`;
+            }
+        }
+        // --------------------------------------
+
         const testCases = await TestCase.find({ problem: problem._id });
         if (!testCases || testCases.length === 0) {
             return res.status(400).json({ message: "Problem has no test cases." });
         }
 
-        // 3. Format data for Judge0 (Batch Submission)
-        const submissions = formatSubmissions(code, languageId, testCases);
+        // 3. Format data for Judge0 (Batch Submission) -> Use finalSubmissionCode
+        const submissions = formatSubmissions(finalSubmissionCode, languageId, testCases);
         const judge0Payload = { submissions };
 
         // 4. Post to Judge0
@@ -67,7 +83,7 @@ export const createSubmission = async (req, res) => {
         const newSubmission = new Submission({
             user: userId,
             problem: problem._id,
-            code: code,
+            code: code, // Save ONLY the user's code to DB (not the driver code)
             language: language,
             status: "Judging", // Set to Judging immediately
             judge0Tokens: submissionTokens, // Store tokens to poll them

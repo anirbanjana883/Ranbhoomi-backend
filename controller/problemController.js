@@ -93,10 +93,10 @@ export const getProblemBySlug = async (req, res) => {
     const problem = await Problem.findOne({ slug: slug })
       .populate({
         path: "testCases",
-        match: { isSample: true },
+        match: { isSample: true }, 
         select: "input expectedOutput _id",
       })
-      .select("-solution"); // Exclude solution by default
+      .select("-solution -driverCode"); 
 
     if (!problem) {
       return res.status(404).json({ message: "Problem not found" });
@@ -122,6 +122,7 @@ export const createProblem = async (req, res) => {
       tags,
       companyTags,
       starterCode,
+      driverCode,
       testCasesData,
       solution,
       isPremium,
@@ -196,6 +197,7 @@ export const createProblem = async (req, res) => {
       tags: validatedTags,
       companyTags: validatedCompanyTags,
       starterCode,
+      driverCode: driverCode || [],
       solution: solution || "",
       isPremium: isPremium || false,
       testCases: [],
@@ -270,6 +272,7 @@ export const updateProblem = async (req, res) => {
       tags,
       companyTags,
       starterCode,
+      driverCode,
       solution,
       isPremium,
       isPublished
@@ -334,6 +337,10 @@ export const updateProblem = async (req, res) => {
     }
     if (isPublished !== undefined) {
       problem.isPublished = Boolean(isPublished); 
+    }
+    if (driverCode !== undefined) {
+        if (!Array.isArray(driverCode)) throw new Error("Driver code must be an array.");
+        problem.driverCode = driverCode;
     }
 
     await problem.save({ session });
