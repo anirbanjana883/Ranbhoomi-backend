@@ -86,7 +86,7 @@ export const getAllProblemsAdmin = async (req, res) => {
   }
 };
 
-// --- GET SINGLE PROBLEM (includes SAMPLE test cases) ---
+// --- GET SINGLE PROBLEM (Public - Excludes Sensitive Data) ---
 export const getProblemBySlug = async (req, res) => {
   try {
     const { slug } = req.params;
@@ -96,6 +96,7 @@ export const getProblemBySlug = async (req, res) => {
         match: { isSample: true }, 
         select: "input expectedOutput _id",
       })
+      // !!! SECURITY: Do not send driverCode to regular users !!!
       .select("-solution -driverCode"); 
 
     if (!problem) {
@@ -104,6 +105,26 @@ export const getProblemBySlug = async (req, res) => {
     return res.status(200).json(problem);
   } catch (error) {
     console.error("Error fetching problem by slug:", error);
+    return res
+      .status(500)
+      .json({ message: `Error fetching problem: ${error.message}` });
+  }
+};
+
+// --- NEW: GET SINGLE PROBLEM FOR EDITING (Admin Only) ---
+export const getProblemForEdit = async (req, res) => {
+  try {
+    const { slug } = req.params;
+    // Return EVERYTHING including driverCode and solution
+    const problem = await Problem.findOne({ slug: slug })
+      .populate("testCases");
+
+    if (!problem) {
+      return res.status(404).json({ message: "Problem not found" });
+    }
+    return res.status(200).json(problem);
+  } catch (error) {
+    console.error("Error fetching problem for edit:", error);
     return res
       .status(500)
       .json({ message: `Error fetching problem: ${error.message}` });
@@ -221,6 +242,8 @@ export const createProblem = async (req, res) => {
     newProblem.testCases = createdTestCases.map((tc) => tc._id);
     await newProblem.save({ session });
 
+    // Handle Contest linking if needed (make sure Contest is imported)
+    /*
     if (originContest && isPublished === false) {
       await Contest.findByIdAndUpdate(
         originContest,
@@ -228,6 +251,7 @@ export const createProblem = async (req, res) => {
         { session }
       );
     }
+    */
 
     // Commit Transaction
     await session.commitTransaction();
@@ -259,7 +283,6 @@ export const createProblem = async (req, res) => {
 };
 
 // --- UPDATE PROBLEM DETAILS (Admin/Master Only) ---
-
 export const updateProblem = async (req, res) => {
   const { slug } = req.params;
   const session = await mongoose.startSession();
@@ -338,6 +361,8 @@ export const updateProblem = async (req, res) => {
     if (isPublished !== undefined) {
       problem.isPublished = Boolean(isPublished); 
     }
+    
+    // Update Driver Code
     if (driverCode !== undefined) {
         if (!Array.isArray(driverCode)) throw new Error("Driver code must be an array.");
         problem.driverCode = driverCode;
@@ -346,7 +371,7 @@ export const updateProblem = async (req, res) => {
     await problem.save({ session });
     await session.commitTransaction();
 
-    // Populate response (optional, based on needs)
+    // Populate response
     await problem.populate({
       path: "testCases",
       match: { isSample: true },
@@ -361,7 +386,7 @@ export const updateProblem = async (req, res) => {
       error.message.includes("not found") ||
       error.message.includes("exists")
     ) {
-      return res.status(400).json({ message: error.message }); // Use 404 if "not found"
+      return res.status(400).json({ message: error.message });
     }
     return res
       .status(500)
@@ -542,11 +567,6 @@ export const getProblemSolution = async (req, res) => {
     if (acceptedSubmission) {
       return res.status(200).json({ solution: problem.solution });
     }
-
-    // 4. (Future Check) Check for premium subscription
-    // if (user.isPremium) {
-    //     return res.status(200).json({ solution: problem.solution });
-    // }
 
     // 5. If none of the above, deny access
     return res

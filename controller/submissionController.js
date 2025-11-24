@@ -11,9 +11,8 @@ const formatSubmissions = (code, languageId, testCases) => {
         language_id: languageId,
         stdin: Buffer.from(tc.input).toString('base64'),
         expected_output: Buffer.from(tc.expectedOutput).toString('base64'),
-        // Add CPU/memory limits if needed
-        // cpu_time_limit: 2, // 2 seconds
-        // memory_limit: 128000 // 128 MB
+        // cpu_time_limit: 2,
+        // memory_limit: 128000
     }));
 };
 
@@ -34,33 +33,37 @@ export const createSubmission = async (req, res) => {
         }
 
         // 2. Find Problem (Fetch _id AND driverCode)
+        // We specifically select driverCode so we can merge it
         const problem = await Problem.findOne({ slug: slug }).select("_id driverCode");
+        
         if (!problem) {
             return res.status(404).json({ message: "Problem not found." });
         }
 
-        // --- NEW: Handle Hidden Driver Code ---
-        let finalSubmissionCode = code;
-        
+        // --- THE MAGIC: Merge User Code + Driver Code ---
+        let finalSourceCode = code;
+
         if (problem.driverCode && problem.driverCode.length > 0) {
+            // Find driver code for this specific language
             const driver = problem.driverCode.find(
                 (dc) => dc.language.toLowerCase() === language.toLowerCase()
             );
-            
+
             if (driver) {
-                // Merge User Code + Driver Code
-                finalSubmissionCode = `${code}\n\n${driver.code}`;
+                // Append driver code to user code
+                finalSourceCode = `${code}\n\n${driver.code}`;
+                console.log(`Merged driver code for ${language}`);
             }
         }
-        // --------------------------------------
+        // -----------------------------------------------
 
         const testCases = await TestCase.find({ problem: problem._id });
         if (!testCases || testCases.length === 0) {
             return res.status(400).json({ message: "Problem has no test cases." });
         }
 
-        // 3. Format data for Judge0 (Batch Submission) -> Use finalSubmissionCode
-        const submissions = formatSubmissions(finalSubmissionCode, languageId, testCases);
+        // 3. Format data for Judge0 using the FINAL MERGED CODE
+        const submissions = formatSubmissions(finalSourceCode, languageId, testCases);
         const judge0Payload = { submissions };
 
         // 4. Post to Judge0
@@ -76,24 +79,23 @@ export const createSubmission = async (req, res) => {
             }
         );
 
-        // 5. Create "Pending" Submission in our DB
-        // We get an array of {token} objects back from Judge0
+        // 5. Create Submission in DB
         const submissionTokens = judge0Response.data.map(s => ({ token: s.token }));
         
         const newSubmission = new Submission({
             user: userId,
             problem: problem._id,
-            code: code, // Save ONLY the user's code to DB (not the driver code)
+            code: code, // IMPORTANT: Save ONLY user's code to DB (history), not the merged one!
             language: language,
-            status: "Judging", // Set to Judging immediately
-            judge0Tokens: submissionTokens, // Store tokens to poll them
+            status: "Judging",
+            judge0Tokens: submissionTokens,
             results: [],
             testCases: testCases.map(tc => tc._id)
         });
 
         await newSubmission.save();
 
-        return res.status(201).json(newSubmission); // Return our submission document
+        return res.status(201).json(newSubmission);
 
     } catch (error) {
         console.error("Submission Error:", error.response ? error.response.data : error.message);
@@ -101,10 +103,10 @@ export const createSubmission = async (req, res) => {
     }
 };
 
-// --- GET SUBMISSION STATUS (GET /api/submissions/status/:submissionId) ---
+// --- GET SUBMISSION STATUS ---
 export const getSubmissionStatus = async (req, res) => {
     try {
-        const { submissionId } = req.params; // This is OUR DB's submission ID
+        const { submissionId } = req.params;
         const userId = req.userId;
 
         const submission = await Submission.findOne({ _id: submissionId, user: userId });
@@ -113,19 +115,15 @@ export const getSubmissionStatus = async (req, res) => {
         }
 
         if (!submission.judge0Tokens || submission.judge0Tokens.length === 0) {
-            
             submission.status = "Runtime Error"; 
             await submission.save();
             return res.status(400).json({ message: "Submission contains no Judge0 tokens." });
         }
 
-        // If already completed, just return it
         if (submission.status === "Accepted" || submission.status.includes("Error") || submission.status.includes("Answer")) {
              return res.status(200).json(submission);
         }
 
-        // --- Poll Judge0 for status ---
-        // Create a comma-separated list of tokens
         const tokens = submission.judge0Tokens.map(t => t.token).join(',');
         
         const judge0Response = await axios.get(
@@ -140,24 +138,22 @@ export const getSubmissionStatus = async (req, res) => {
 
         const results = judge0Response.data.submissions;
         
-        // --- Process Results ---
-        let finalStatus = "Accepted"; // Assume success
+        let finalStatus = "Accepted";
         const processedResults = [];
         let allProcessed = true;
 
         for (const [index, result] of results.entries()) {
-            const testCaseId = submission.testCases[index]; // Assumes testCases were stored in submission
+            const testCaseId = submission.testCases[index]; 
 
             let caseStatus = "Pending";
-            if (result.status_id === 1 || result.status_id === 2) { // In Queue or Processing
+            if (result.status_id === 1 || result.status_id === 2) { 
                 allProcessed = false;
                 finalStatus = "Judging";
                 caseStatus = "Judging";
-            } else if (result.status_id === 3) { // Accepted
+            } else if (result.status_id === 3) { 
                 caseStatus = "Passed";
-            } else { // 4=WA, 5=TLE, 6=Compilation, 7-12=Runtime Error
+            } else { 
                 caseStatus = "Failed";
-                // Set final status to the first error encountered
                 if (finalStatus === "Accepted" || finalStatus === "Judging") {
                     finalStatus = result.status_id === 4 ? "Wrong Answer" :
                                   result.status_id === 5 ? "Time Limit Exceeded" :
@@ -169,7 +165,6 @@ export const getSubmissionStatus = async (req, res) => {
                  testCase: testCaseId,
                  status: caseStatus,
                  output: result.stdout ? Buffer.from(result.stdout, 'base64').toString('utf-8') : null,
-                 // Add stderr, compile_output etc. if you need
              });
         }
         
@@ -187,25 +182,23 @@ export const getSubmissionStatus = async (req, res) => {
     }
 };
 
-// --- GET SUBMISSIONS FOR PROBLEM (GET /api/submissions/problem/:slug) ---
+// --- GET SUBMISSIONS FOR PROBLEM ---
 export const getSubmissionsForProblem = async (req, res) => {
     try {
-        const { slug } = req.params; // Get problem slug
-        const userId = req.userId; // Get user ID from isAuth middleware
+        const { slug } = req.params; 
+        const userId = req.userId; 
 
-        // 1. Find the problem by slug to get its ID
         const problem = await Problem.findOne({ slug: slug }).select("_id");
         if (!problem) {
             return res.status(404).json({ message: "Problem not found." });
         }
 
-        // 2. Find all submissions matching the problem ID and user ID
         const submissions = await Submission.find({
             problem: problem._id,
             user: userId
         })
-        .select("status language createdAt") // Select only fields needed for the list
-        .sort({ createdAt: -1 }); // Show newest first
+        .select("status language createdAt") 
+        .sort({ createdAt: -1 }); 
 
         return res.status(200).json(submissions);
 
