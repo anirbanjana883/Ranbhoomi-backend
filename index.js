@@ -15,6 +15,7 @@ import contestRouter from "./route/contestRoutes.js";
 import contestSubmissionRouter from "./route/contestSubmissionRoute.js";
 import interviewRouter from "./route/interviewRoute.js";
 import commentRouter from "./route/commentRoute.js";
+import aiRouter from "./route/aiRoute.js";
 import http from "http";
 import { Server } from "socket.io";
 import InterviewSession from "./models/interviewSessionModel.js";
@@ -55,6 +56,7 @@ app.use("/api/contests", contestRouter);
 app.use("/api/contest-submissions", contestSubmissionRouter);
 app.use("/api/interview", interviewRouter);
 app.use('/api/comments', commentRouter);
+app.use("/api/ai", aiRouter);
 
 app.get("/", (req, res) => {
   res.send("Hello from RANBHOOMI ");
