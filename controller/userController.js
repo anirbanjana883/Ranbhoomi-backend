@@ -2,6 +2,9 @@
 import uploadOnCloudinary from "../config/cloudinary.js";
 import User from "../models/userModel.js";
 import AdminRequest from "../models/adminRequestModel.js";
+import Submission from "../models/submissionModel.js"
+import Problem from "../models/problemModel.js";
+import ContestRanking from "../models/contestRankingModel.js";
 
 // get current user
 export const getCurrentUser = async (req, res) => {
@@ -65,36 +68,134 @@ export const updateProfile = async (req, res) => {
   }
 };
 
-// Get public user profile
+// --- GET USER PROFILE (Handles both Dashboard & Public View) ---
 export const getUserProfile = async (req, res) => {
   try {
+    const { username } = req.params;
+    let user;
 
-    const { username } = req.params; 
-    
-    const user = await User.findOne({ username: username }).select(
-
-      "name username description photoUrl github linkedin createdAt"
-    );
+    // 1. Determine which user to find
+    if (username) {
+      user = await User.findOne({ username: username }).select(
+        "name username description photoUrl github linkedin createdAt role"
+      );
+    } else {
+      user = await User.findById(req.userId).select("-password");
+    }
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const pendingRequest = await AdminRequest.findOne({ 
-      userId: user._id, 
-      status: 'pending' 
-    });
+    // 2. Check Admin Request Status (Private only)
+    let adminStatus = 'none';
+    if (!username) {
+        try {
+            const pendingRequest = await AdminRequest.findOne({ 
+                userId: user._id, 
+                status: 'pending' 
+            });
+            if (pendingRequest) adminStatus = 'pending';
+        } catch (err) {}
+    }
 
     const userObj = user.toObject();
+    userObj.adminRequestStatus = adminStatus;
+
+    // ---------------------------------------------------------
+    // 3. CALCULATE "PRO" STATS
+    // ---------------------------------------------------------
     
+    // A. Submissions & Solved Counts
+    const submissions = await Submission.find({ user: user._id })
+      .populate("problem", "difficulty title slug") 
+      .sort({ createdAt: -1 });
 
-    userObj.adminRequestStatus = pendingRequest ? 'pending' : 'none';
+    const solvedProblemIds = new Set();
+    let easy = 0, medium = 0, hard = 0, superHard = 0;
 
+    submissions.forEach((sub) => {
+      if (sub.status === "Accepted" && sub.problem) {
+        const probId = sub.problem._id.toString();
+        if (!solvedProblemIds.has(probId)) {
+          solvedProblemIds.add(probId);
+          const diff = sub.problem.difficulty;
+          if (diff === "Easy") easy++;
+          else if (diff === "Medium") medium++;
+          else if (diff === "Hard") hard++;
+          else if (diff === "Super Hard") superHard++;
+        }
+      }
+    });
 
-    return res.status(200).json(userObj); 
+    // B. Heatmap Data
+    const submissionMap = {};
+    submissions.forEach((sub) => {
+      const date = sub.createdAt.toISOString().split("T")[0];
+      submissionMap[date] = (submissionMap[date] || 0) + 1;
+    });
+
+    const heatmapData = Object.keys(submissionMap).map((date) => ({
+      date,
+      count: submissionMap[date],
+    }));
+
+    // C. Recent Submissions
+    const recentActivity = submissions.slice(0, 5).map((sub) => ({
+      _id: sub._id,
+      title: sub.problem ? sub.problem.title : "Deleted Problem",
+      slug: sub.problem ? sub.problem.slug : "#",
+      status: sub.status,
+      date: sub.createdAt,
+      language: sub.language
+    }));
+
+    // --- D. NEW: CONTEST HISTORY ---
+    // Find all rankings where this user is listed
+    const contestRankings = await ContestRanking.find({
+      "rankings.user": user._id
+    }).populate("contest", "title slug startTime");
+
+    const contestHistory = contestRankings.map(cr => {
+        if (!cr.contest) return null; // Handle deleted contests
+        
+        // Find specific user rank in this contest
+        const userEntry = cr.rankings.find(r => r.user.toString() === user._id.toString());
+        if (!userEntry) return null;
+
+        return {
+            contestId: cr.contest._id,
+            title: cr.contest.title,
+            slug: cr.contest.slug,
+            date: cr.contest.startTime,
+            rank: userEntry.rank,
+            score: userEntry.totalScore,
+            totalParticipants: cr.rankings.length
+        };
+    })
+    .filter(c => c !== null)
+    .sort((a, b) => new Date(b.date) - new Date(a.date)); // Newest first
+
+    // ---------------------------------------------------------
+    // 4. Send Response
+    // ---------------------------------------------------------
+    return res.status(200).json({ 
+      user: userObj,
+      stats: {
+        totalSolved: solvedProblemIds.size,
+        easy,
+        medium,
+        hard,
+        superHard,
+        heatmap: heatmapData,
+        recent: recentActivity,
+        contestHistory: contestHistory // <-- Added this
+      }
+    });
 
   } catch (error) {
-    return res.status(500).json({ message: `GetUserProfile error ${error}` });
+    console.error("Profile Error:", error);
+    return res.status(500).json({ message: `GetUserProfile error: ${error.message}` });
   }
 };
 
@@ -117,3 +218,4 @@ export const getSolvedProblems = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+
