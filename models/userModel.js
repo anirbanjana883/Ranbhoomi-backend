@@ -34,6 +34,20 @@ const userSchema = new mongoose.Schema(
       required: true,
       default: "user", 
     },
+    subscriptionPlan: {
+      type: String,
+      enum: ["Free", "Warrior", "Gladiator"],
+      default: "Free",
+    },
+    subscriptionExpiresAt: {
+      type: Date,
+      default: null, 
+    },
+    // Used to track daily limits (like AI usage)
+    aiUsage: {
+      count: { type: Number, default: 0 },
+      lastUsed: { type: Date, default: Date.now }
+    },
     photoUrl: {
       type: String,
       default: "", 

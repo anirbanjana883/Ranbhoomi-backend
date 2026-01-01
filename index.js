@@ -20,6 +20,7 @@ import http from "http";
 import { Server } from "socket.io";
 import InterviewSession from "./models/interviewSessionModel.js";
 import Problem from "./models/problemModel.js";
+import paymentRouter from "./route/paymentRoute.js";
 
 dotenv.config();
 
@@ -57,6 +58,7 @@ app.use("/api/contest-submissions", contestSubmissionRouter);
 app.use("/api/interview", interviewRouter);
 app.use('/api/comments', commentRouter);
 app.use("/api/ai", aiRouter);
+app.use("/api/payment", paymentRouter);
 
 app.get("/", (req, res) => {
   res.send("Hello from RANBHOOMI ");

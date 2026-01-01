@@ -2,21 +2,28 @@ import express from "express";
 import {
     calculateRanking,
     createContest,
+    createPrivateContest,
     deleteContest,
     getAllContests,
     getContestDetails, 
     getRanking, 
     registerForContest,
-    updateContest, 
+    updateContest,
+    updatePrivateContest, 
 } from "../controller/contestController.js"; 
 import isAuth from "../middleware/isAuth.js";
 import isAdmin from "../middleware/isAdmin.js"; 
+import isPremium from "../middleware/isPremium.js";
 
 const contestRouter = express.Router();
 
 // --- Public Route ---
 
 contestRouter.get("/", getAllContests);
+
+contestRouter.post("/private", isAuth, isPremium, createPrivateContest);
+
+contestRouter.put("/private/:slug", isAuth, isPremium, updatePrivateContest);
 
 // --- Admin/Master Only Route ---
 

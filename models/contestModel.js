@@ -15,7 +15,6 @@ const contestSchema = new mongoose.Schema(
             type: String,
             required: true,
             trim: true,
-            unique: true,
         },
         slug: {
             type: String,
@@ -36,14 +35,26 @@ const contestSchema = new mongoose.Schema(
             type: Date,
             required: true,
         },
-        problems: [contestProblemSchema], // Array of problems included in the contest
+        visibility: {
+            type: String,
+            enum: ['PUBLIC', 'PRIVATE'],
+            default: 'PUBLIC',
+            index: true 
+        },
+        inviteCode: {
+            type: String,
+            unique: true, 
+            sparse: true, 
+            trim: true
+        },
+        problems: [contestProblemSchema], 
         registeredUsers: [
             {
                 type: mongoose.Schema.Types.ObjectId,
                 ref: 'User',
             }
         ],
-        // 'createdBy' field is good for tracking who made the contest
+        
         createdBy: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User',
@@ -54,15 +65,14 @@ const contestSchema = new mongoose.Schema(
             default: false,
             index: true,
         },
-        // We'll add rankings later, maybe as a separate model
-        // rankings: [ ... ]
+
     },
     {
-        timestamps: true // Adds createdAt and updatedAt
+        timestamps: true 
     }
 );
 
-// Middleware to ensure endTime is after startTime
+
 contestSchema.pre('save', function (next) {
     if (this.endTime <= this.startTime) {
         next(new Error('Contest end time must be after the start time.'));

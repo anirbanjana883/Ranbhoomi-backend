@@ -77,7 +77,7 @@ export const getUserProfile = async (req, res) => {
     // 1. Determine which user to find
     if (username) {
       user = await User.findOne({ username: username }).select(
-        "name username description photoUrl github linkedin createdAt role"
+        "name username description photoUrl github linkedin createdAt role subscriptionPlan"
       );
     } else {
       user = await User.findById(req.userId).select("-password");
