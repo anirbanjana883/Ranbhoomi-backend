@@ -21,6 +21,7 @@ import { Server } from "socket.io";
 import InterviewSession from "./models/interviewSessionModel.js";
 import Problem from "./models/problemModel.js";
 import paymentRouter from "./route/paymentRoute.js";
+import { initWorker } from "./config/queue.js";
 
 dotenv.config();
 
@@ -40,12 +41,18 @@ const io = new Server(httpServer, {
 
 app.use(express.json());
 app.use(cookieParser());
+
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin: ["http://localhost:5173", process.env.CLIENT_URL],
     credentials: true,
   })
 );
+
+app.use((req, res, next) => {
+  console.log(`🔎 INCOMING REQUEST: ${req.method} ${req.originalUrl}`);
+  next();
+});
 
 app.use("/api/auth", authRouter);
 app.use("/api/user", userRouter);
@@ -120,7 +127,7 @@ io.on("connection", (socket) => {
       });
 
       if (!problem) {
-        console.error("❌ Error: Problem not found with ID:", problemId); // <-- ADD THIS
+        console.error(" Error: Problem not found with ID:", problemId); // <-- ADD THIS
         return;
       }
 
@@ -133,7 +140,7 @@ io.on("connection", (socket) => {
       io.to(roomID).emit("problem-selected", { problem });
 
     } catch (err) {
-      console.error("❌ FATAL ERROR selecting problem:", err); // <-- This will catch crashes
+      console.error(" FATAL ERROR selecting problem:", err); // <-- This will catch crashes
     }
   });
 
@@ -154,7 +161,7 @@ io.on("connection", (socket) => {
 
 
   socket.on("disconnect", () => {
-    console.log(`❌ Socket disconnected: ${socket.id}`);
+    console.log(` Socket disconnected: ${socket.id}`);
   });
 });
 
@@ -162,6 +169,9 @@ io.on("connection", (socket) => {
 const startServer = async () => {
   try {
     await connectDb();
+
+    // START THE WORKER 
+    initWorker();
 
     httpServer.listen(port, () => {
       console.log(`Server is running on port : ${port}`);
@@ -180,8 +190,3 @@ const startServer = async () => {
 };
 
 startServer();
-
-// app.listen(port,() =>{
-//     console.log(`Server is running on port : ${port}`)
-//     connectDb()
-// })

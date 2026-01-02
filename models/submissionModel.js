@@ -8,7 +8,7 @@ const testResultSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['Passed', 'Failed', 'Error'],
+        enum: ['Passed', 'Failed', 'Error', 'Judging'], // Added Judging here just in case frontend needs it per case
         required: true,
     },
     output: {
@@ -44,15 +44,15 @@ const submissionSchema = new mongoose.Schema(
         status: {
             type: String,
             enum: [
+                'Queued', 
                 'Pending', 'Judging', 'Accepted', 'Wrong Answer',
                 'Time Limit Exceeded', 'Runtime Error', 'Compilation Error',
                 'Memory Limit Exceeded',
             ],
-            default: 'Pending',
+            default: 'Queued', 
             required: true,
         },
 
-        
         judge0Tokens: [
             {
                 token: { type: String, required: true }

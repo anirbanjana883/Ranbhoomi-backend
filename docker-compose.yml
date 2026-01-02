@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  # 1. Your Backend Application
+  server:
+    build: .
+    container_name: ranbhoomi-backend
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      # Docker Networking: "mongo" and "redis" refer to the service names below
+      - MONGODB_URL=${MONGODB_URL}
+      - REDIS_URL=${REDIS_URL}
+      # Pass your existing secrets here (or use an .env file)
+      - JWT_SECRET=${JWT_SECRET}
+      - CLIENT_URL=http://localhost:5173
+      # Add other keys like STRIPE_SECRET_KEY, OPENAI_API_KEY, etc. here if needed
+    depends_on:
+      - mongo
+      - redis
+    volumes:
+      # This maps your local folder to the container, so changes happen instantly (Hot Reload)
+      - .:/app
+      - /app/node_modules
+
+  # 2. MongoDB Service
+  mongo:
+    image: mongo:latest
+    container_name: ranbhoomi-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  # 3. Redis Service (The new addition for speed)
+  redis:
+    image: redis:alpine
+    container_name: ranbhoomi-redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  mongo_data:

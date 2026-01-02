@@ -4,6 +4,7 @@ import ContestSubmission from "../models/contestSubmissionModel.js";
 import ContestRanking from "../models/contestRankingModel.js";
 import mongoose from "mongoose";
 import { randomBytes } from "crypto";
+import redis from "../config/redis.js";
 
 // --- HELPER: LOGIC TO CALCULATE RANKS (Reused for Live & Final) ---
 const performRankingCalculation = async (contestId, startTime) => {
@@ -596,40 +597,59 @@ export const calculateRanking = async (req, res) => {
   }
 };
 
-// --- GET RANKING (Live & Past) ---
+// --- GET RANKING (Redis Optimized) ---
 export const getRanking = async (req, res) => {
   try {
     const { slug } = req.params;
-    const contest = await Contest.findOne({ slug });
-    if (!contest)
-      return res.status(404).json({ message: "Contest not found." });
+    
+    //  UNIQUE REDIS KEY
+    const cacheKey = `leaderboard:${slug}`;
 
-    // 1. Try to find a SAVED ranking (Past Contests)
+    //  SPEED CHECK
+    const cachedData = await redis.get(cacheKey);
+    if (cachedData) {
+      console.log(" Serving Leaderboard from Redis Cache");
+      return res.status(200).json(JSON.parse(cachedData));
+    }
+
+    console.log(" Calculating Leaderboard from MongoDB...");
+
+    //  CACHE MISS
+    const contest = await Contest.findOne({ slug });
+    if (!contest) return res.status(404).json({ message: "Contest not found." });
+
+    let responseData;
+
+    //  Check if a permanent ranking exists (for Past Contests)
     const savedRanking = await ContestRanking.findOne({ contest: contest._id })
       .populate("rankings.user", "name username photoUrl")
       .populate("rankings.problemResults.problem", "title slug");
 
     if (savedRanking) {
-      return res.status(200).json(savedRanking);
+      responseData = savedRanking;
+    } else {
+      //  If not, calculate LIVE
+      const liveRankings = await performRankingCalculation(
+        contest._id,
+        contest.startTime
+      );
+
+      const populatedRankings = await ContestSubmission.populate(liveRankings, {
+        path: "user",
+        select: "name username photoUrl",
+      });
+
+      responseData = {
+        contest: contest._id,
+        rankings: populatedRankings,
+      };
     }
 
-    // 2. If no saved ranking, calculate LIVE (In-Memory)
-    const liveRankings = await performRankingCalculation(
-      contest._id,
-      contest.startTime
-    );
+    //  SAVE TO REDIS
+    await redis.set(cacheKey, JSON.stringify(responseData), "EX", 10);
 
-    // Populate User Details for the Live Data
-    const populatedRankings = await ContestSubmission.populate(liveRankings, {
-      path: "user",
-      select: "name username photoUrl",
-    });
+    return res.status(200).json(responseData);
 
-    // Return structure matching the frontend expectation
-    return res.status(200).json({
-      contest: contest._id,
-      rankings: populatedRankings,
-    });
   } catch (error) {
     console.error("Error fetching ranking:", error);
     return res.status(500).json({ message: error.message });

@@ -1,129 +1,79 @@
 import Submission from "../models/submissionModel.js";
 import Problem from "../models/problemModel.js";
-import TestCase from "../models/testCaseModel.js";
-import { getLanguageId } from "../config/languageIds.js";
+import TestCase from "../models/testCaseModel.js"; 
 import axios from "axios";
+import { submissionQueue } from "../config/queue.js"; 
 
-// Helper to format data for Judge0 Batch Submission
-const formatSubmissions = (code, languageId, testCases) => {
-    return testCases.map(tc => ({
-        source_code: Buffer.from(code).toString('base64'),
-        language_id: languageId,
-        stdin: Buffer.from(tc.input).toString('base64'),
-        expected_output: Buffer.from(tc.expectedOutput).toString('base64'),
-        // cpu_time_limit: 2,
-        // memory_limit: 128000
-    }));
-};
-
-// --- CREATE SUBMISSION  ---
+// --- CREATE SUBMISSION ---
 export const createSubmission = async (req, res) => {
     const { slug, language, code } = req.body;
     const userId = req.userId;
 
     if (!language || !code || !slug) {
-        return res.status(400).json({ message: "Problem, language, and code are required." });
+        return res.status(400).json({ message: "Invalid input." });
     }
 
     try {
-        // 1. Get Language ID
-        const languageId = getLanguageId(language);
-        if (!languageId) {
-            return res.status(400).json({ message: `Language '${language}' is not supported.` });
-        }
+        // 1. Verify Problem Exists
+        const problem = await Problem.findOne({ slug }).select("_id");
+        if (!problem) return res.status(404).json({ message: "Problem not found." });
 
-        // 2. Find Problem (Fetch _id AND driverCode)
-        // We specifically select driverCode so we can merge it
-        const problem = await Problem.findOne({ slug: slug }).select("_id driverCode");
-        
-        if (!problem) {
-            return res.status(404).json({ message: "Problem not found." });
-        }
-
-        // --- THE MAGIC: Merge User Code + Driver Code ---
-        let finalSourceCode = code;
-
-        if (problem.driverCode && problem.driverCode.length > 0) {
-            // Find driver code for this specific language
-            const driver = problem.driverCode.find(
-                (dc) => dc.language.toLowerCase() === language.toLowerCase()
-            );
-
-            if (driver) {
-                // Append driver code to user code
-                finalSourceCode = `${code}\n\n${driver.code}`;
-                console.log(`Merged driver code for ${language}`);
-            }
-        }
-        // -----------------------------------------------
-
-        const testCases = await TestCase.find({ problem: problem._id });
-        if (!testCases || testCases.length === 0) {
-            return res.status(400).json({ message: "Problem has no test cases." });
-        }
-
-        // 3. Format data for Judge0 using the FINAL MERGED CODE
-        const submissions = formatSubmissions(finalSourceCode, languageId, testCases);
-        const judge0Payload = { submissions };
-
-        // 4. Post to Judge0
-        const judge0Response = await axios.post(
-            `https://${process.env.JUDGE0_API_HOST}/submissions/batch?base64_encoded=true`,
-            judge0Payload,
-            {
-                headers: {
-                    'x-rapidapi-key': process.env.JUDGE0_API_KEY,
-                    'x-rapidapi-host': process.env.JUDGE0_API_HOST,
-                    'Content-Type': 'application/json'
-                }
-            }
-        );
-
-        // 5. Create Submission in DB
-        const submissionTokens = judge0Response.data.map(s => ({ token: s.token }));
-        
+        // 2. Create "Placeholder" Submission in DB
         const newSubmission = new Submission({
             user: userId,
             problem: problem._id,
-            code: code, // IMPORTANT: Save ONLY user's code to DB (history), not the merged one!
+            code: code,
             language: language,
-            status: "Judging",
-            judge0Tokens: submissionTokens,
-            results: [],
-            testCases: testCases.map(tc => tc._id)
+            status: "Queued", // New Status!
+            judge0Tokens: [],
+            results: []
         });
-
         await newSubmission.save();
 
+        // 3. Add to Redis Queue ⚡
+        await submissionQueue.add("process-submission", {
+            submissionId: newSubmission._id,
+            code,
+            language,
+            slug
+        });
+
+        // 4. Return immediately!
         return res.status(201).json(newSubmission);
 
     } catch (error) {
-        console.error("Submission Error:", error.response ? error.response.data : error.message);
-        return res.status(500).json({ message: `Submission failed: ${error.message}` });
+        console.error("Queue Error:", error);
+        return res.status(500).json({ message: "Server error" });
     }
 };
 
-// --- GET SUBMISSION STATUS ---
+// --- GET SUBMISSION STATUS  ---
 export const getSubmissionStatus = async (req, res) => {
     try {
         const { submissionId } = req.params;
         const userId = req.userId;
 
         const submission = await Submission.findOne({ _id: submissionId, user: userId });
-        if (!submission) {
-            return res.status(404).json({ message: "Submission not found." });
+        if (!submission) return res.status(404).json({ message: "Not found." });
+
+        
+        if (submission.status === "Queued") {
+            return res.status(200).json({ 
+                status: "Queued", 
+                message: "Waiting for worker..." 
+            });
         }
 
+        
         if (!submission.judge0Tokens || submission.judge0Tokens.length === 0) {
-            submission.status = "Runtime Error"; 
-            await submission.save();
-            return res.status(400).json({ message: "Submission contains no Judge0 tokens." });
+            return res.status(400).json({ message: "No tokens found." });
         }
 
-        if (submission.status === "Accepted" || submission.status.includes("Error") || submission.status.includes("Answer")) {
+        if (["Accepted", "Wrong Answer", "Time Limit Exceeded", "Compilation Error", "Runtime Error"].includes(submission.status)) {
              return res.status(200).json(submission);
         }
 
+        
         const tokens = submission.judge0Tokens.map(t => t.token).join(',');
         
         const judge0Response = await axios.get(
@@ -137,30 +87,31 @@ export const getSubmissionStatus = async (req, res) => {
         );
 
         const results = judge0Response.data.submissions;
-        
         let finalStatus = "Accepted";
-        const processedResults = [];
         let allProcessed = true;
+        
+        const processedResults = [];
 
+        
         for (const [index, result] of results.entries()) {
-            const testCaseId = submission.testCases[index]; 
+             const testCaseId = submission.testCases[index]; 
+             let caseStatus = "Pending";
 
-            let caseStatus = "Pending";
-            if (result.status_id === 1 || result.status_id === 2) { 
-                allProcessed = false;
-                finalStatus = "Judging";
-                caseStatus = "Judging";
-            } else if (result.status_id === 3) { 
-                caseStatus = "Passed";
-            } else { 
-                caseStatus = "Failed";
-                if (finalStatus === "Accepted" || finalStatus === "Judging") {
-                    finalStatus = result.status_id === 4 ? "Wrong Answer" :
-                                  result.status_id === 5 ? "Time Limit Exceeded" :
-                                  result.status_id === 6 ? "Compilation Error" : "Runtime Error";
-                }
-            }
-            
+             if (result.status_id === 1 || result.status_id === 2) { 
+                 allProcessed = false;
+                 finalStatus = "Judging";
+                 caseStatus = "Judging";
+             } else if (result.status_id === 3) { 
+                 caseStatus = "Passed";
+             } else { 
+                 caseStatus = "Failed";
+                 if (["Accepted", "Judging"].includes(finalStatus)) {
+                     finalStatus = result.status_id === 4 ? "Wrong Answer" :
+                                   result.status_id === 5 ? "Time Limit Exceeded" :
+                                   result.status_id === 6 ? "Compilation Error" : "Runtime Error";
+                 }
+             }
+             
              processedResults.push({
                  testCase: testCaseId,
                  status: caseStatus,
@@ -177,13 +128,13 @@ export const getSubmissionStatus = async (req, res) => {
         return res.status(200).json(submission);
 
     } catch (error) {
-        console.error("Get Status Error:", error.response ? error.response.data : error.message);
-        return res.status(500).json({ message: `Failed to get submission status: ${error.message}` });
+        return res.status(500).json({ message: error.message });
     }
 };
 
-// --- GET SUBMISSIONS FOR PROBLEM ---
+// ...  getSubmissionsForProblem  ...
 export const getSubmissionsForProblem = async (req, res) => {
+    // ... (Your existing code is fine) ...
     try {
         const { slug } = req.params; 
         const userId = req.userId; 
