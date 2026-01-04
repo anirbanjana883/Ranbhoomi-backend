@@ -35,9 +35,12 @@ const contestSubmissionSchema = new mongoose.Schema(
     },
     code: { type: String, required: true },
     language: { type: String, required: true, trim: true, lowercase: true },
+    
+    // 👇 UPDATE THIS SECTION
     status: {
       type: String,
       enum: [
+        "Queued", // 👈 ADD THIS! (Matches your Controller)
         "Pending",
         "Judging",
         "Accepted",
@@ -47,9 +50,10 @@ const contestSubmissionSchema = new mongoose.Schema(
         "Compilation Error",
         "Memory Limit Exceeded",
       ],
-      default: "Pending",
+      default: "Queued", // Default should match the initial state
       required: true,
     },
+    
     judge0Tokens: [{ token: { type: String, required: true } }],
     testCases: [{ type: mongoose.Schema.Types.ObjectId, ref: "TestCase" }],
     results: [testResultSchema],

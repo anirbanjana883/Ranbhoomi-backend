@@ -67,6 +67,13 @@ const submissionSchema = new mongoose.Schema(
         ],
 
         results: [testResultSchema],
+
+        score: { 
+            type: Number, 
+            default: 0, 
+            min: 0,
+            max: 100
+        },
     },
     {
         timestamps: true,

@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # 1. Your Backend Application
+  # Backend Application
   server:
     build: .
     container_name: ranbhoomi-backend
@@ -24,7 +24,7 @@ services:
       - .:/app
       - /app/node_modules
 
-  # 2. MongoDB Service
+  # MongoDB Service
   mongo:
     image: mongo:latest
     container_name: ranbhoomi-mongo
@@ -33,7 +33,7 @@ services:
     volumes:
       - mongo_data:/data/db
 
-  # 3. Redis Service (The new addition for speed)
+  # Redis Service 
   redis:
     image: redis:alpine
     container_name: ranbhoomi-redis

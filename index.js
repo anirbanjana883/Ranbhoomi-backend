@@ -4,6 +4,7 @@ import connectDb from "./config/connectDB.js";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import cron from "node-cron";
+import jwt from "jsonwebtoken";
 import { publishEndedContestProblems } from "./services/contestPublisher.js";
 import authRouter from "./route/authRoute.js";
 import userRouter from "./route/userRoute.js";
@@ -71,20 +72,41 @@ app.get("/", (req, res) => {
   res.send("Hello from RANBHOOMI ");
 });
 
+
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token || socket.handshake.query.token;
+
+  if (token) {
+    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+      if (err) return next(new Error("Authentication error"));
+      socket.userId = decoded.userId || decoded.id; 
+      next();
+    });
+  } else {
+    // If no token, allowed for interview with no user id 
+    socket.userId = null;
+    next();
+  }
+});
+
 // This is the "phone operator"
 io.on("connection", (socket) => {
-  console.log(`⚡ Connected: ${socket.id}`);
+  console.log(`⚡ Connected: ${socket.id} (User: ${socket.userId || "Anonymous"})`);
 
   socket.onAny((event, payload) => {
     console.log(`📨 Event: ${event}`, payload?.roomID || "");
   });
 
+  if (socket.userId) {
+    socket.join(socket.userId); 
+  }
+
   socket.on("join-room", (roomID) => {
     if (!roomID) return;
-    if (Array.from(socket.rooms).includes(roomID)) return; // ✅ already joined
+    if (Array.from(socket.rooms).includes(roomID)) return; 
 
     socket.join(roomID);
-    console.log(`📡 ${socket.id} joined room ${roomID}`);
+    console.log(` ${socket.id} joined room ${roomID}`);
     socket.to(roomID).emit("user-joined", { socketId: socket.id });
   });
 
@@ -118,7 +140,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("select-problem", async ({ roomID, problemId }) => {
-    console.log(`[Socket] Event: 'select-problem' received for room ${roomID}`); // <-- ADD THIS
+    console.log(`[Socket] Event: 'select-problem' received for room ${roomID}`); 
     try {
       const problem = await Problem.findById(problemId).populate({
         path: "testCases",
@@ -127,7 +149,7 @@ io.on("connection", (socket) => {
       });
 
       if (!problem) {
-        console.error(" Error: Problem not found with ID:", problemId); // <-- ADD THIS
+        console.error(" Error: Problem not found with ID:", problemId); 
         return;
       }
 
@@ -136,11 +158,11 @@ io.on("connection", (socket) => {
         { problem: problemId }
       );
 
-      console.log(`[Socket] Event: 'problem-selected' emitting to room ${roomID}`); // <-- ADD THIS
+      console.log(`[Socket] Event: 'problem-selected' emitting to room ${roomID}`); 
       io.to(roomID).emit("problem-selected", { problem });
 
     } catch (err) {
-      console.error(" FATAL ERROR selecting problem:", err); // <-- This will catch crashes
+      console.error(" FATAL ERROR selecting problem:", err); 
     }
   });
 
@@ -169,13 +191,11 @@ io.on("connection", (socket) => {
 const startServer = async () => {
   try {
     await connectDb();
-
-    // START THE WORKER 
-    initWorker();
+    initWorker(io);
 
     httpServer.listen(port, () => {
       console.log(`Server is running on port : ${port}`);
-      console.log("Socket.io listening for connections..."); // New log
+      console.log("Socket.io listening for connections..."); 
 
       cron.schedule("30 * * * *", () => {
         console.log("Scheduler: Checking for contests to publish...");

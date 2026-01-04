@@ -1,10 +1,8 @@
 import Submission from "../models/submissionModel.js";
 import Problem from "../models/problemModel.js";
-import TestCase from "../models/testCaseModel.js"; 
-import axios from "axios";
-import { submissionQueue } from "../config/queue.js"; 
+import { submissionQueue } from "../config/queue.js";
 
-// --- CREATE SUBMISSION ---
+// --- CREATE SUBMISSION (Producer) ---
 export const createSubmission = async (req, res) => {
     const { slug, language, code } = req.body;
     const userId = req.userId;
@@ -24,18 +22,20 @@ export const createSubmission = async (req, res) => {
             problem: problem._id,
             code: code,
             language: language,
-            status: "Queued", // New Status!
+            status: "Queued", // Starts as Queued
             judge0Tokens: [],
             results: []
         });
         await newSubmission.save();
 
-        // 3. Add to Redis Queue ⚡
+        // 3. Add to Redis Queue
+        // The Worker will pick this up and handle ALL Judge0 communication
         await submissionQueue.add("process-submission", {
             submissionId: newSubmission._id,
             code,
             language,
-            slug
+            slug,
+            userId // Pass userId so Worker can send Socket event
         });
 
         // 4. Return immediately!
@@ -47,84 +47,17 @@ export const createSubmission = async (req, res) => {
     }
 };
 
-// --- GET SUBMISSION STATUS  ---
+// --- GET SUBMISSION STATUS ---
 export const getSubmissionStatus = async (req, res) => {
     try {
         const { submissionId } = req.params;
         const userId = req.userId;
 
         const submission = await Submission.findOne({ _id: submissionId, user: userId });
-        if (!submission) return res.status(404).json({ message: "Not found." });
 
-        
-        if (submission.status === "Queued") {
-            return res.status(200).json({ 
-                status: "Queued", 
-                message: "Waiting for worker..." 
-            });
+        if (!submission) {
+            return res.status(404).json({ message: "Submission not found." });
         }
-
-        
-        if (!submission.judge0Tokens || submission.judge0Tokens.length === 0) {
-            return res.status(400).json({ message: "No tokens found." });
-        }
-
-        if (["Accepted", "Wrong Answer", "Time Limit Exceeded", "Compilation Error", "Runtime Error"].includes(submission.status)) {
-             return res.status(200).json(submission);
-        }
-
-        
-        const tokens = submission.judge0Tokens.map(t => t.token).join(',');
-        
-        const judge0Response = await axios.get(
-            `https://${process.env.JUDGE0_API_HOST}/submissions/batch?tokens=${tokens}&base64_encoded=true&fields=status_id,stdout,stderr,compile_output,time,memory`,
-            {
-                headers: {
-                    'x-rapidapi-key': process.env.JUDGE0_API_KEY,
-                    'x-rapidapi-host': process.env.JUDGE0_API_HOST,
-                }
-            }
-        );
-
-        const results = judge0Response.data.submissions;
-        let finalStatus = "Accepted";
-        let allProcessed = true;
-        
-        const processedResults = [];
-
-        
-        for (const [index, result] of results.entries()) {
-             const testCaseId = submission.testCases[index]; 
-             let caseStatus = "Pending";
-
-             if (result.status_id === 1 || result.status_id === 2) { 
-                 allProcessed = false;
-                 finalStatus = "Judging";
-                 caseStatus = "Judging";
-             } else if (result.status_id === 3) { 
-                 caseStatus = "Passed";
-             } else { 
-                 caseStatus = "Failed";
-                 if (["Accepted", "Judging"].includes(finalStatus)) {
-                     finalStatus = result.status_id === 4 ? "Wrong Answer" :
-                                   result.status_id === 5 ? "Time Limit Exceeded" :
-                                   result.status_id === 6 ? "Compilation Error" : "Runtime Error";
-                 }
-             }
-             
-             processedResults.push({
-                 testCase: testCaseId,
-                 status: caseStatus,
-                 output: result.stdout ? Buffer.from(result.stdout, 'base64').toString('utf-8') : null,
-             });
-        }
-        
-        if (allProcessed) {
-            submission.status = finalStatus;
-        }
-        submission.results = processedResults;
-        await submission.save();
-
         return res.status(200).json(submission);
 
     } catch (error) {
@@ -132,12 +65,11 @@ export const getSubmissionStatus = async (req, res) => {
     }
 };
 
-// ...  getSubmissionsForProblem  ...
+// ... GET SUBMISSION FOR PROBLEM ...
 export const getSubmissionsForProblem = async (req, res) => {
-    // ... (Your existing code is fine) ...
     try {
-        const { slug } = req.params; 
-        const userId = req.userId; 
+        const { slug } = req.params;
+        const userId = req.userId;
 
         const problem = await Problem.findOne({ slug: slug }).select("_id");
         if (!problem) {
@@ -148,13 +80,13 @@ export const getSubmissionsForProblem = async (req, res) => {
             problem: problem._id,
             user: userId
         })
-        .select("status language createdAt") 
-        .sort({ createdAt: -1 }); 
+        .select("status language createdAt score") 
+        .sort({ createdAt: -1 });
 
         return res.status(200).json(submissions);
 
     } catch (error) {
         console.error("Error fetching submissions:", error);
-        return res.status(500).json({ message: `Error fetching submissions: ${error.message}` });
+        return res.status(500).json({ message: "Server error" });
     }
 };
