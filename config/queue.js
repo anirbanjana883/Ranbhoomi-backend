@@ -69,7 +69,7 @@ export const initWorker = (io) => {
     "submission-queue",
     async (job) => {
         const { submissionId, code, language, slug, userId } = job.data;
-        console.log(`👷 Worker processing submission: ${submissionId}`);
+        console.log(` Worker processing submission: ${submissionId}`);
 
         try {
             const languageId = getLanguageId(language);
@@ -118,7 +118,7 @@ export const initWorker = (io) => {
                 judge0Tokens: tokens.map(t => ({ token: t })),
             });
 
-            console.log(`✅ Job ${submissionId} Finished: ${finalStatus}`);
+            console.log(` Job ${submissionId} Finished: ${finalStatus}`);
             
             // Return data for the Socket Emitter
             return { 

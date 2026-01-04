@@ -60,7 +60,7 @@ const performRankingCalculation = async (contestId, startTime) => {
       });
 
       // Update Totals
-      userData.totalScore += sub.points || 10; // Default 10 if points missing
+      userData.totalScore += sub.score || 10; // Default 10 if points missing
       userData.totalPenalty += finalPenalty;
     } else if (sub.status !== "Judging" && sub.status !== "Pending") {
       // Wrong Answer penalty

@@ -6,11 +6,11 @@ dotenv.config();
 let redis;
 
 if (process.env.REDIS_URL) {
-  // Docker Production Mode: Connect using the full URL from docker-compose
+  // Docker Production Mode
   console.log("🔌 Connecting to Redis via URL...");
   redis = new Redis(process.env.REDIS_URL);
 } else {
-  // Local Development Mode: Connect to localhost
+  // Local Development Mode
   console.log(" Connecting to Redis via Localhost...");
   redis = new Redis({
     host: "localhost",
