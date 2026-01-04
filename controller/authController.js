@@ -4,6 +4,17 @@ import bcrypt from "bcryptjs";
 import genToken from "../config/token.js";
 import sendMail from "../config/sendMail.js";
 
+// --- ENVIRONMENT CHECK ---
+// This automatically switches between 'false' (Localhost) and 'true' (Deployment)
+const isProduction = process.env.NODE_ENV === "production";
+
+// Helper for Cookie Options
+const cookieOptions = {
+  httpOnly: true,
+  secure: isProduction, // false on localhost, true on https
+  sameSite: isProduction ? "None" : "Lax", // 'Lax' is smoother for local dev
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+};
 
 const generateUsername = async (name) => {
   let baseUsername = name
@@ -17,17 +28,14 @@ const generateUsername = async (name) => {
   while (!isUnique) {
     const existingUser = await User.findOne({ username: username });
     if (!existingUser) {
-      // We found a unique name!
       isUnique = true;
     } else {
-      // If it exists, add a random 4-digit number and loop again to re-check
       const randomSuffix = Math.floor(1000 + Math.random() * 9000);
       username = `${baseUsername}-${randomSuffix}`;
     }
   }
   return username;
 };
-
 
 // ------------------------ SIGNUP ------------------------
 export const signup = async (req, res) => {
@@ -58,12 +66,9 @@ export const signup = async (req, res) => {
     });
 
     const token = await genToken(user._id);
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: false, // set true in production
-      sameSite: "Strict",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+
+    // ✅ USED DYNAMIC COOKIE OPTIONS
+    res.cookie("token", token, cookieOptions);
 
     // Send welcome email
     const subject = "🎉 Welcome to Ranbhoomi!";
@@ -96,12 +101,9 @@ export const logIn = async (req, res) => {
       return res.status(400).json({ message: "Incorrect Password" });
 
     const token = await genToken(user._id);
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: false,
-      sameSite: "Strict",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+
+    // ✅ USED DYNAMIC COOKIE OPTIONS
+    res.cookie("token", token, cookieOptions);
 
     return res.status(200).json(user);
   } catch (error) {
@@ -112,11 +114,11 @@ export const logIn = async (req, res) => {
 // ------------------------ LOGOUT ------------------------
 export const logOut = async (req, res) => {
   try {
-    await res.clearCookie("token", {
-      httpOnly: true,
-      secure: false,
-      sameSite: "Strict",
-    });
+    // Clear cookie with same options (except maxAge)
+    const { maxAge, ...clearOptions } = cookieOptions;
+    
+    res.clearCookie("token", clearOptions);
+    
     return res.status(200).json({ message: `Logout successfully` });
   } catch (error) {
     return res.status(500).json({ message: `Logout error ${error}` });
@@ -216,7 +218,6 @@ export const googleAuth = async (req, res) => {
     if (!user) {
       user = await User.create({ name, email, role: "user" });
 
-      // send welcome email
       const subject = "👋 Welcome to Ranbhoomi (Google Auth)";
       const html = `
         <div style="font-family:Arial,sans-serif;text-align:center;padding:20px;">
@@ -231,12 +232,9 @@ export const googleAuth = async (req, res) => {
     }
 
     const token = await genToken(user._id);
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: false,
-      sameSite: "Strict",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    
+    // ✅ USED DYNAMIC COOKIE OPTIONS
+    res.cookie("token", token, cookieOptions);
 
     return res.status(200).json(user);
   } catch (error) {

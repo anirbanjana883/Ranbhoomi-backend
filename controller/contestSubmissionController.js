@@ -103,29 +103,23 @@ export const getContestSubmissionStatus = async (req, res) => {
         const { submissionId } = req.params; 
         const userId = req.userId;
 
-        // Find the submission, ensuring it belongs to the logged-in user
         const submission = await ContestSubmission.findOne({ _id: submissionId, user: userId });
-        if (!submission) {
-            return res.status(404).json({ message: "Contest submission not found." });
-        }
+        if (!submission) return res.status(404).json({ message: "Contest submission not found." });
 
-        // Check for tokens 
         if (!submission.judge0Tokens || submission.judge0Tokens.length === 0) {
             submission.status = "Runtime Error";
             await submission.save();
             return res.status(400).json({ message: "Submission contains no Judge0 tokens." });
         }
 
-        // If judging is already complete, just return the saved result
+
         if (submission.status !== "Judging" && submission.status !== "Pending") {
              return res.status(200).json(submission);
         }
 
-        //  Poll Judge0 for the status 
         const tokens = submission.judge0Tokens.map(t => t.token).join(',');
-        
         const judge0Response = await axios.get(
-            `https://${process.env.JUDGE0_API_HOST}/submissions/batch?tokens=${tokens}&base64_encoded=true&fields=status_id,stdout,stderr,compile_output,time,memory`,
+            `https://${process.env.JUDGE0_API_HOST}/submissions/batch?tokens=${tokens}&base64_encoded=true&fields=status_id,stdout,stderr,compile_output`,
             {
                 headers: {
                     'x-rapidapi-key': process.env.JUDGE0_API_KEY,
@@ -135,16 +129,12 @@ export const getContestSubmissionStatus = async (req, res) => {
         );
 
         const results = judge0Response.data.submissions;
-        
-        //  Process Results 
         let finalStatus = "Accepted"; 
         const processedResults = [];
         let allProcessed = true; 
 
         for (const [index, result] of results.entries()) {
-            // Get the corresponding test case ID from our stored array
             const testCaseId = submission.testCases[index]; 
-            
             let caseStatus = "Pending";
             let output = null;
 
@@ -158,7 +148,6 @@ export const getContestSubmissionStatus = async (req, res) => {
             } else { 
                 caseStatus = "Failed";
                 output = result.stdout ? Buffer.from(result.stdout, 'base64').toString('utf-8') : null;
-                // Set final status to the first error encountered
                 if (finalStatus === "Accepted" || finalStatus === "Judging") {
                     switch (result.status_id) {
                         case 4: finalStatus = "Wrong Answer"; break;
@@ -173,13 +162,26 @@ export const getContestSubmissionStatus = async (req, res) => {
                  testCase: testCaseId,
                  status: caseStatus,
                  output: output,
-                 // wiil implement more field here e.g., result.time, result.memory
              });
         }
-        
-        // Only update the final status if all test cases are processed
+
         if (allProcessed) {
             submission.status = finalStatus;
+
+            if (finalStatus === "Accepted") {
+                
+                const contest = await Contest.findById(submission.contest);
+                
+                
+                const problemEntry = contest.problems.find(p => 
+                    p.problem.toString() === submission.problem.toString()
+                );
+
+                
+                submission.score = problemEntry ? problemEntry.points : 0;
+            } else {
+                submission.score = 0; // 0 points if failed
+            }
         }
         
         submission.results = processedResults;
@@ -188,8 +190,8 @@ export const getContestSubmissionStatus = async (req, res) => {
         return res.status(200).json(submission);
 
     } catch (error) {
-        console.error("Get Contest Status Error:", error.response ? error.response.data : error.message);
-        return res.status(500).json({ message: `Failed to get submission status: ${error.message}` });
+        console.error("Get Contest Status Error:", error);
+        return res.status(500).json({ message: error.message });
     }
 };
 

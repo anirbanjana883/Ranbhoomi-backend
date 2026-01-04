@@ -54,8 +54,13 @@ const contestSubmissionSchema = new mongoose.Schema(
     testCases: [{ type: mongoose.Schema.Types.ObjectId, ref: "TestCase" }],
     results: [testResultSchema],
     
+    score: { 
+        type: Number, 
+        default: 0,
+        index: true 
+    },
+
     submissionTime: { type: Date, default: Date.now }, 
-    // You can add 'penalty' or 'points' here later
   },
   {
     timestamps: true,

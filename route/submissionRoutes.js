@@ -1,4 +1,3 @@
-
 import express from "express";
 import {
     createSubmission,
@@ -6,11 +5,12 @@ import {
     getSubmissionStatus
 } from "../controller/submissionController.js";
 import isAuth from "../middleware/isAuth.js";
+import { rateLimiter } from "../middleware/rateLimiter.js"; 
 
 const submissionRouter = express.Router();
 submissionRouter.use(isAuth); 
 
-submissionRouter.post("/", createSubmission);
+submissionRouter.post("/", rateLimiter, createSubmission);
 
 submissionRouter.get("/problem/:slug", getSubmissionsForProblem);
 

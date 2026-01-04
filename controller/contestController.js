@@ -56,6 +56,7 @@ const performRankingCalculation = async (contestId, startTime) => {
       userData.problemResults.set(problemId, {
         status: "Accepted",
         penalty: finalPenalty,
+        submissionTime: submissionTimeInMinutes,
       });
 
       // Update Totals
@@ -68,6 +69,7 @@ const performRankingCalculation = async (contestId, startTime) => {
       userData.problemResults.set(problemId, {
         status: "Attempted",
         penalty: currentPenalty + penaltyPerWrong,
+        submissionTime: 0,
       });
     }
   }
@@ -566,7 +568,7 @@ export const updateContest = async (req, res) => {
   }
 };
 
-// --- CALCULATE RANKING (Finalize for Past Contests) ---
+// --- CALCULATE RANKING via corn or admin ---
 export const calculateRanking = async (req, res) => {
   const { slug } = req.params;
   try {
@@ -597,7 +599,7 @@ export const calculateRanking = async (req, res) => {
   }
 };
 
-// --- GET RANKING (Redis Optimized) ---
+// --- GET RANKING (Redis Optimized) for live update when user click scorecard ---
 export const getRanking = async (req, res) => {
   try {
     const { slug } = req.params;
@@ -655,3 +657,5 @@ export const getRanking = async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 };
+
+
