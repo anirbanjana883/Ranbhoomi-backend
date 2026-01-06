@@ -6,6 +6,8 @@ import cors from "cors";
 import cron from "node-cron";
 import jwt from "jsonwebtoken";
 import { publishEndedContestProblems } from "./services/contestPublisher.js";
+import { finalizeEndedContests } from "./services/contestFinalizer.js";
+import responseTime from "response-time";
 import authRouter from "./route/authRoute.js";
 import userRouter from "./route/userRoute.js";
 import adminRequestRouter from "./route/adminRequestRoute.js";
@@ -51,8 +53,39 @@ app.use(
 );
 
 app.use((req, res, next) => {
-  console.log(`🔎 INCOMING REQUEST: ${req.method} ${req.originalUrl}`);
+  console.log(` INCOMING REQUEST: ${req.method} ${req.originalUrl}`);
   next();
+});
+
+// app.use(
+//   responseTime((req, res, time) => {
+//     if (req.path === "/metrics") return; 
+//     const route = req.route ? req.route.path : req.path;
+    
+//     // Increment Counter
+//     httpRequestCounter.inc({
+//       method: req.method,
+//       route: route,
+//       status_code: res.statusCode,
+//     });
+
+//     // Record Duration 
+//     httpRequestDurationMicroseconds.observe(
+//       {
+//         method: req.method,
+//         route: route,
+//         status_code: res.statusCode,
+//       },
+//       time / 1000
+//     );
+//   })
+// );
+
+// EXPOSED METRICS ENDPOINT CHECKED BY PROMETHUS
+
+app.get("/metrics", async (req, res) => {
+  res.setHeader("Content-Type", register.contentType);
+  res.send(await register.metrics());
 });
 
 app.use("/api/auth", authRouter);
@@ -91,10 +124,10 @@ io.use((socket, next) => {
 
 // This is the "phone operator"
 io.on("connection", (socket) => {
-  console.log(`⚡ Connected: ${socket.id} (User: ${socket.userId || "Anonymous"})`);
+  console.log(` Connected: ${socket.id} (User: ${socket.userId || "Anonymous"})`);
 
   socket.onAny((event, payload) => {
-    console.log(`📨 Event: ${event}`, payload?.roomID || "");
+    console.log(` Event: ${event}`, payload?.roomID || "");
   });
 
   if (socket.userId) {
@@ -197,9 +230,16 @@ const startServer = async () => {
       console.log(`Server is running on port : ${port}`);
       console.log("Socket.io listening for connections..."); 
 
-      cron.schedule("30 * * * *", () => {
-        console.log("Scheduler: Checking for contests to publish...");
-        publishEndedContestProblems();
+      cron.schedule("*/5 * * * *", async () => { 
+        console.log("Scheduler: Running contest maintenance tasks...");
+        
+        // Publish Problems 
+        await publishEndedContestProblems();
+
+        // Finalize Rankings 
+        await finalizeEndedContests();
+        
+        console.log(" Scheduler: Tasks completed.");
       });
       console.log("Scheduled contest publisher to run hourly.");
     });

@@ -11,7 +11,7 @@ services:
       - PORT=5000
       # Docker Networking: "mongo" and "redis" refer to the service names below
       - MONGODB_URL=${MONGODB_URL}
-      - REDIS_URL=${REDIS_URL}
+      - REDIS_URL=redis://redis:6379
       # Pass your existing secrets here (or use an .env file)
       - JWT_SECRET=${JWT_SECRET}
       - CLIENT_URL=http://localhost:5173

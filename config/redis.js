@@ -7,7 +7,7 @@ let redis;
 
 if (process.env.REDIS_URL) {
   // Docker Production Mode
-  console.log("🔌 Connecting to Redis via URL...");
+  console.log("Connecting to Redis via URL...");
   redis = new Redis(process.env.REDIS_URL);
 } else {
   // Local Development Mode

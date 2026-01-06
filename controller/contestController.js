@@ -1,99 +1,12 @@
 import Contest from "../models/contestModel.js";
 import Problem from "../models/problemModel.js";
+import User from "../models/userModel.js";
 import ContestSubmission from "../models/contestSubmissionModel.js";
 import ContestRanking from "../models/contestRankingModel.js";
 import mongoose from "mongoose";
 import { randomBytes } from "crypto";
 import redis from "../config/redis.js";
-
-// --- HELPER: LOGIC TO CALCULATE RANKS (Reused for Live & Final) ---
-const performRankingCalculation = async (contestId, startTime) => {
-  // Fetch all relevant submissions
-  const submissions = await ContestSubmission.find({ contest: contestId })
-    .select("user problem status createdAt points")
-    .sort({ createdAt: "asc" });
-
-  const contestStart = new Date(startTime).getTime();
-  const penaltyPerWrong = 20;
-
-  // Map<userId, { user, totalScore, totalPenalty, problemResults }>
-  const userScores = new Map();
-
-  for (const sub of submissions) {
-    const userId = sub.user.toString();
-    const problemId = sub.problem.toString();
-
-    if (!userScores.has(userId)) {
-      userScores.set(userId, {
-        user: sub.user,
-        totalScore: 0,
-        totalPenalty: 0,
-        problemResults: new Map(),
-      });
-    }
-
-    const userData = userScores.get(userId);
-
-    // If already accepted, skip future submissions for this problem
-    if (
-      userData.problemResults.has(problemId) &&
-      userData.problemResults.get(problemId).status === "Accepted"
-    ) {
-      continue;
-    }
-
-    // Calculate time taken in minutes
-    const submissionTimeInMinutes = Math.max(
-      0,
-      (new Date(sub.createdAt).getTime() - contestStart) / (1000 * 60)
-    );
-
-    if (sub.status === "Accepted") {
-      const currentPenalty =
-        userData.problemResults.get(problemId)?.penalty || 0;
-      const finalPenalty = currentPenalty + submissionTimeInMinutes;
-
-      userData.problemResults.set(problemId, {
-        status: "Accepted",
-        penalty: finalPenalty,
-        submissionTime: submissionTimeInMinutes,
-      });
-
-      // Update Totals
-      userData.totalScore += sub.score || 10; // Default 10 if points missing
-      userData.totalPenalty += finalPenalty;
-    } else if (sub.status !== "Judging" && sub.status !== "Pending") {
-      // Wrong Answer penalty
-      const currentPenalty =
-        userData.problemResults.get(problemId)?.penalty || 0;
-      userData.problemResults.set(problemId, {
-        status: "Attempted",
-        penalty: currentPenalty + penaltyPerWrong,
-        submissionTime: 0,
-      });
-    }
-  }
-
-  // Convert Map to Array
-  const rankingsArray = Array.from(userScores.values()).map((u) => ({
-    user: u.user,
-    totalScore: u.totalScore,
-    totalPenalty: Math.round(u.totalPenalty),
-    problemResults: Array.from(u.problemResults.entries()).map(([p, data]) => ({
-      problem: p,
-      ...data,
-    })),
-  }));
-
-  // Sort: High Score > Low Penalty
-  rankingsArray.sort((a, b) => {
-    if (a.totalScore !== b.totalScore) return b.totalScore - a.totalScore;
-    return a.totalPenalty - b.totalPenalty;
-  });
-
-  // Assign Ranks (1st, 2nd, 3rd...)
-  return rankingsArray.map((entry, index) => ({ ...entry, rank: index + 1 }));
-};
+import * as rankingService from "../services/rankingService.js";
 
 // --- CREATE CONTEST (Admin/Master Only) ---
 export const createContest = async (req, res) => {
@@ -568,7 +481,7 @@ export const updateContest = async (req, res) => {
   }
 };
 
-// --- CALCULATE RANKING via corn or admin ---
+// --- MANUAL RANKING CALCULATION (Admin) ---
 export const calculateRanking = async (req, res) => {
   const { slug } = req.params;
   try {
@@ -576,13 +489,13 @@ export const calculateRanking = async (req, res) => {
     if (!contest)
       return res.status(404).json({ message: "Contest not found." });
 
-    // Calculate using helper
-    const rankings = await performRankingCalculation(
+    // 1. Calculate using Service
+    const rankings = await rankingService.calculateContestRanking(
       contest._id,
       contest.startTime
     );
 
-    // Save permanently to DB
+    // 2. Save permanently to DB
     const newRanking = await ContestRanking.findOneAndUpdate(
       { contest: contest._id },
       {
@@ -599,56 +512,68 @@ export const calculateRanking = async (req, res) => {
   }
 };
 
-// --- GET RANKING (Redis Optimized) for live update when user click scorecard ---
+// --- GET RANKING (Public - radis Optimized Hybrid Flow) ---
 export const getRanking = async (req, res) => {
   try {
     const { slug } = req.params;
-    
-    //  UNIQUE REDIS KEY
     const cacheKey = `leaderboard:${slug}`;
 
-    //  SPEED CHECK
+    // 1. REDIS CHECK (Fastest)
     const cachedData = await redis.get(cacheKey);
     if (cachedData) {
-      console.log(" Serving Leaderboard from Redis Cache");
+      console.log(" Serving Leaderboard from Redis");
       return res.status(200).json(JSON.parse(cachedData));
     }
 
-    console.log(" Calculating Leaderboard from MongoDB...");
+    console.log(" Calculating/Fetching Leaderboard from DB...");
 
-    //  CACHE MISS
     const contest = await Contest.findOne({ slug });
     if (!contest) return res.status(404).json({ message: "Contest not found." });
 
     let responseData;
+    let cacheTTL; 
 
-    //  Check if a permanent ranking exists (for Past Contests)
-    const savedRanking = await ContestRanking.findOne({ contest: contest._id })
-      .populate("rankings.user", "name username photoUrl")
-      .populate("rankings.problemResults.problem", "title slug");
+    //  DECIDE SOURCE: ARCHIVE vs LIVE
+    if (contest.isRankingsFinalized) {
+      // --- A. ARCHIVED FLOW (Past Contest) ---
+      // Fetch from ContestRanking collection (Cheap)
+      const savedRanking = await ContestRanking.findOne({ contest: contest._id })
+        .populate("rankings.user", "name username photoUrl")
+        .populate("rankings.problemResults.problem", "title slug difficulty");
 
-    if (savedRanking) {
       responseData = savedRanking;
-    } else {
-      //  If not, calculate LIVE
-      const liveRankings = await performRankingCalculation(
+      cacheTTL = 3600; // 1 Hour (It won't change)
+    } 
+    else {
+      // --- B. LIVE FLOW (Active Contest) ---
+      // Calculate from Submissions (Expensive)
+      const liveRankings = await rankingService.calculateContestRanking(
         contest._id,
         contest.startTime
       );
 
-      const populatedRankings = await ContestSubmission.populate(liveRankings, {
+      // Populate manually for Live Objects
+      await User.populate(liveRankings, {
         path: "user",
         select: "name username photoUrl",
       });
 
+      await Problem.populate(liveRankings, {
+        path: "problemResults.problem",
+        select: "title slug difficulty",
+      });
+
       responseData = {
         contest: contest._id,
-        rankings: populatedRankings,
+        rankings: liveRankings,
       };
+      cacheTTL = 10; // 10 Seconds (Real-time updates)
     }
 
-    //  SAVE TO REDIS
-    await redis.set(cacheKey, JSON.stringify(responseData), "EX", 10);
+    // 3. SAVE TO REDIS
+    if (responseData) {
+        await redis.set(cacheKey, JSON.stringify(responseData), "EX", cacheTTL);
+    }
 
     return res.status(200).json(responseData);
 
@@ -657,5 +582,4 @@ export const getRanking = async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 };
-
 
