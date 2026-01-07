@@ -1,7 +1,7 @@
 import client from "prom-client";
 
-// Registry to hold metrics
-const register = new client.Registry();
+// 1. ADD 'export' HERE so server.js can see it
+export const register = new client.Registry();
 
 // Add default metrics (CPU usage, RAM usage, Event Loop lag)
 client.collectDefaultMetrics({ register });
@@ -32,4 +32,4 @@ export const submissionQueueGauge = new client.Gauge({
   registers: [register],
 });
 
-export default register;
+// (No need for export default register anymore)

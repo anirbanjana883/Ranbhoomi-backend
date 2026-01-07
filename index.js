@@ -25,6 +25,12 @@ import InterviewSession from "./models/interviewSessionModel.js";
 import Problem from "./models/problemModel.js";
 import paymentRouter from "./route/paymentRoute.js";
 import { initWorker } from "./config/queue.js";
+import { 
+  register, 
+  httpRequestCounter, 
+  httpRequestDurationMicroseconds 
+} from "./config/monitoring.js";
+import helmet from "helmet";
 
 dotenv.config();
 
@@ -57,29 +63,29 @@ app.use((req, res, next) => {
   next();
 });
 
-// app.use(
-//   responseTime((req, res, time) => {
-//     if (req.path === "/metrics") return; 
-//     const route = req.route ? req.route.path : req.path;
+app.use(
+  responseTime((req, res, time) => {
+    if (req.path === "/metrics") return; 
+    const route = req.route ? req.route.path : req.path;
     
-//     // Increment Counter
-//     httpRequestCounter.inc({
-//       method: req.method,
-//       route: route,
-//       status_code: res.statusCode,
-//     });
+    // Increment Counter
+    httpRequestCounter.inc({
+      method: req.method,
+      route: route,
+      status_code: res.statusCode,
+    });
 
-//     // Record Duration 
-//     httpRequestDurationMicroseconds.observe(
-//       {
-//         method: req.method,
-//         route: route,
-//         status_code: res.statusCode,
-//       },
-//       time / 1000
-//     );
-//   })
-// );
+    // Record Duration 
+    httpRequestDurationMicroseconds.observe(
+      {
+        method: req.method,
+        route: route,
+        status_code: res.statusCode,
+      },
+      time / 1000
+    );
+  })
+);
 
 // EXPOSED METRICS ENDPOINT CHECKED BY PROMETHUS
 

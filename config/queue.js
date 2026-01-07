@@ -71,7 +71,7 @@ const pollJudge0Results = async (tokens) => {
 // MAIN WORKER
 export const initWorker = (io) => {
   
-  // 👇 1. MONITORING: Update Queue Depth Metric every 5s
+  // MONITORING: Update Queue Depth Metric every 5s
   setInterval(async () => {
      const waiting = await submissionQueue.getWaitingCount();
      const active = await submissionQueue.getActiveCount();
@@ -81,11 +81,11 @@ export const initWorker = (io) => {
   const worker = new Worker(
     "submission-queue",
     async (job) => {
-        // 👇 2. Extract Contest Data
+        // Extract Contest Data
         const { submissionId, code, language, slug, userId, isContest, contestId, userName } = job.data;
         const SubmissionModel = isContest ? ContestSubmission : Submission;
 
-        console.log(`👷 Processing ${isContest ? "Contest" : "Practice"} Submission: ${submissionId}`);
+        console.log(`Processing ${isContest ? "Contest" : "Practice"} Submission: ${submissionId}`);
 
         try {
             const languageId = getLanguageId(language);
@@ -126,7 +126,7 @@ export const initWorker = (io) => {
             const isAllAccepted = results.length > 0 && results.every(r => r.status.id === 3);
             const finalStatus = isAllAccepted ? "Accepted" : "Wrong Answer"; 
             
-            // 👇 3. Score Logic (Use Problem Score for contests)
+            // Score Logic (Use Problem Score for contests)
             const score = isAllAccepted ? (isContest ? (problem.score || 10) : 100) : 0;
 
             const detailedResults = results.map((r, index) => ({
@@ -143,9 +143,9 @@ export const initWorker = (io) => {
                 results: detailedResults
             });
 
-            console.log(`✅ Job ${submissionId} Finished: ${finalStatus}`);
+            console.log(`Job ${submissionId} Finished: ${finalStatus}`);
 
-            // 👇 4. LEADERBOARD UPDATE
+            // LEADERBOARD UPDATE
             if (isContest && finalStatus === "Accepted" && contestId) {
                 await updateLeaderboard(contestId, userId, userName || "User", score);
             }
@@ -161,7 +161,7 @@ export const initWorker = (io) => {
             };
 
         } catch (error) {
-            console.error(`❌ Job ${submissionId} Failed:`, error.message);
+            console.error(`Job ${submissionId} Failed:`, error.message);
             await SubmissionModel.findByIdAndUpdate(submissionId, { status: "Runtime Error" });
             throw error;
         }
@@ -182,5 +182,5 @@ export const initWorker = (io) => {
     }
   });
 
-  console.log("👷 Worker is running with Monitoring & Contest Support...");
+  console.log("Worker is running with Monitoring & Contest Support...");
 };
