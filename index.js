@@ -58,6 +58,34 @@ app.use(
   })
 );
 
+
+app.use(
+  helmet({
+ 
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+
+    // security policy
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        connectSrc: [
+          "'self'", 
+          "http://localhost:5173", 
+          "ws://localhost:5000",
+           process.env.CLIENT_URL || "http://localhost:5173", 
+        ],
+        imgSrc: [
+          "'self'", 
+          "data:", 
+          "https://lh3.googleusercontent.com", 
+        ],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+      },
+    },
+  })
+);
+
+
 app.use((req, res, next) => {
   console.log(` INCOMING REQUEST: ${req.method} ${req.originalUrl}`);
   next();
