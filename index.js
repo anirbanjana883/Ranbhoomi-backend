@@ -10,6 +10,7 @@ import { finalizeEndedContests } from "./services/contestFinalizer.js";
 import responseTime from "response-time";
 import authRouter from "./route/authRoute.js";
 import userRouter from "./route/userRoute.js";
+import communityRouter from "./route/communityRoutes.js";
 import adminRequestRouter from "./route/adminRequestRoute.js";
 import problemRouter from "./route/problemRoute.js";
 import tagRouter from "./route/tagRoutes.js";
@@ -78,6 +79,7 @@ app.use(
           "'self'", 
           "data:", 
           "https://lh3.googleusercontent.com", 
+          "https://cdn-icons-png.flaticon.com",
         ],
         scriptSrc: ["'self'", "'unsafe-inline'"],
       },
@@ -134,6 +136,7 @@ app.use("/api/interview", interviewRouter);
 app.use('/api/comments', commentRouter);
 app.use("/api/ai", aiRouter);
 app.use("/api/payment", paymentRouter);
+app.use("/api/community", communityRouter);
 
 app.get("/", (req, res) => {
   res.send("Hello from RANBHOOMI ");
