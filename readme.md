@@ -91,9 +91,9 @@ Client (Web)
 |
 | REST + WebSockets
 v
-Express API Gateway
+Express **API** Gateway
 |
-├── Auth & RBAC
+├── Auth & **RBAC**
 ├── Feature Gating
 ├── Problem / Contest / Community APIs
 |
@@ -109,30 +109,13 @@ Express API Gateway
 |
 └── Prometheus Metrics
 
-yaml
-Copy code
 
----
 
 ## 🗂️ Project Structure
 
-backend/
-├── config/ # Environment, DB, Redis, OAuth configs
-├── controller/ # Route controllers (thin layer)
-├── middleware/ # Auth, RBAC, rate limiting, validation
-├── models/ # Mongoose schemas
-├── route/ # API route definitions
-├── services/ # Business logic layer
-├── workers/ # BullMQ async workers
-├── index.js # Application entry point
-├── Dockerfile
-├── docker-compose.yml
-└── prometheus.yml
+backend/ ├── config/ # Environment, DB, Redis, OAuth configs ├── controller/ # Route controllers (thin layer) ├── middleware/ # Auth, **RBAC**, rate limiting, validation ├── models/ # Mongoose schemas ├── route/ # **API** route definitions ├── services/ # Business logic layer ├── workers/ # BullMQ async workers ├── index.js # Application entry point ├── Dockerfile ├── docker-compose.yml └── prometheus.yml
 
-yaml
-Copy code
 
----
 
 ## 🔗 API Endpoints (High-Level)
 
@@ -245,60 +228,61 @@ Copy code
 ---
 
 ### 2️⃣ Environment Variables (`.env`)
-PORT=5000
-MONGODB_URL=your_mongodb_url
-JWT_SECRET=your_jwt_secret
 
-CLIENT_URL=http://localhost:5173
+PORT = 5000 
 
-REDIS_URL=redis://localhost:6379
+MONGODB_URL = "your MONGODB_URL"
 
-JUDGE0_API_KEY=your_judge0_key
-JUDGE0_API_HOST=judge0-ce.p.rapidapi.com
+JWT_SECRET = "your JWT_SECRET"
 
-GEMINI_API_KEY=your_gemini_key
+USER_EMAIL = "your USER_EMAIL"
 
-RAZORPAY_KEY_ID=your_key
-RAZORPAY_KEY_SECRET=your_secret
+USER_PASSWORD = "your USER_PASSWORD"
 
-MASTER_EMAIL=admin@email.com
-MASTER_PASSWORD=strongpassword
+CLOUDINARY_NAME= "your CLOUDINARY_NAME"
 
-yaml
-Copy code
+CLOUDINARY_API_KEY= "your CLOUDINARY_API_KEY"
 
----
+CLOUDINARY_API_SECRET= "your CLOUDINARY_API_SECRET"
+
+
+MASTER_EMAIL = "your MASTER_EMAIL"
+
+MASTER_PASSWORD = "your MASTER_PASSWORD"
+
+
+
+JUDGE0_API_KEY= "your JUDGE0_API_KEY"
+
+JUDGE0_API_HOST="judge0-ce.p.rapidapi.com"
+
+GEMINI_API_KEY = ""your GEMINI_API_KEY"
+
+
+RAZORPAY_KEY_ID = "your RAZORPAY_KEY_ID"
+RAZORPAY_KEY_SECRET = "your RAZORPAY_KEY_SECRET"
+
+REDIS_URL = "your REDIS_URL"
+
 
 ### 3️⃣ Install Dependencies
 npm install
-
-yaml
-Copy code
 
 ---
 
 ### 4️⃣ Run with Docker (Recommended)
 docker-compose up --build
 
-yaml
-Copy code
-
 ---
 
 ### 5️⃣ Create Master Admin (One-Time)
 node createMaster.js
-
-yaml
-Copy code
 
 ---
 
 ### 6️⃣ Metrics
 Prometheus scrape endpoint:
 GET /metrics
-
-yaml
-Copy code
 
 ---
 
