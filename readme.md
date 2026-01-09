@@ -87,34 +87,47 @@ This backend is emphasizing:
 
 ## 🏗️ High-Level Architecture
 
+```
 Client (Web)
-|
-| REST + WebSockets
-v
-Express **API** Gateway
-|
-├── Auth & **RBAC**
-├── Feature Gating
-├── Problem / Contest / Community APIs
-|
-├── Redis
-| ├── Rate Limiting
-| ├── Caching
-| └── BullMQ Queues
-|
-├── Worker Processes
-| └── Judge0 Code Execution
-|
-├── MongoDB
-|
-└── Prometheus Metrics
-
+│
+├── REST + WebSockets
+│
+▼
+Express API Gateway
+│
+├── Modules
+│   ├── Auth & RBAC
+│   ├── Feature Gating
+│   └── Problem / Contest / Community APIs
+│
+├── Data & State
+│   ├── MongoDB
+│   └── Redis
+│       ├── Rate Limiting
+│       ├── Caching
+│       └── BullMQ Queues ──> Worker Processes ──> Judge0 Code Execution
+│
+└── Monitoring
+    └── Prometheus Metrics
+```
 
 
 ## 🗂️ Project Structure
 
-backend/ ├── config/ # Environment, DB, Redis, OAuth configs ├── controller/ # Route controllers (thin layer) ├── middleware/ # Auth, **RBAC**, rate limiting, validation ├── models/ # Mongoose schemas ├── route/ # **API** route definitions ├── services/ # Business logic layer ├── workers/ # BullMQ async workers ├── index.js # Application entry point ├── Dockerfile ├── docker-compose.yml └── prometheus.yml
-
+```
+backend/
+├── config/           # Environment, DB, Redis, OAuth configs
+├── controller/       # Route controllers (thin layer)
+├── middleware/       # Auth, RBAC, rate limiting, validation
+├── models/           # Mongoose schemas
+├── route/            # API route definitions
+├── services/         # Business logic layer
+├── workers/          # BullMQ async workers
+├── index.js          # Application entry point
+├── Dockerfile
+├── docker-compose.yml
+└── prometheus.yml
+```
 
 
 ## 🔗 API Endpoints (High-Level)
@@ -260,29 +273,29 @@ GEMINI_API_KEY = ""your GEMINI_API_KEY"
 
 
 RAZORPAY_KEY_ID = "your RAZORPAY_KEY_ID"
+
 RAZORPAY_KEY_SECRET = "your RAZORPAY_KEY_SECRET"
 
 REDIS_URL = "your REDIS_URL"
 
 
 ### 3️⃣ Install Dependencies
-npm install
+`npm install`
 
 ---
 
 ### 4️⃣ Run with Docker (Recommended)
-docker-compose up --build
+`docker-compose up --build`
 
 ---
 
 ### 5️⃣ Create Master Admin (One-Time)
-node createMaster.js
+`node createMaster.js`
 
 ---
 
 ### 6️⃣ Metrics
-Prometheus scrape endpoint:
-GET /metrics
+`Prometheus scrape endpoint : GET /metrics`
 
 ---
 
@@ -315,3 +328,4 @@ GET /metrics
 ## 📌 Final Note
 This backend is built **as if it were serving real users at scale**.  
 Every architectural decision reflects **real-world production trade-offs** — exactly what **FAANG int
+
