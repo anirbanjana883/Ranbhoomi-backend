@@ -1,92 +1,95 @@
+import mongoose from "mongoose";
 import Submission from "../models/submissionModel.js";
 import Problem from "../models/problemModel.js";
-import { submissionQueue } from "../config/queue.js";
+import { dispatchQueue } from "../config/queue.js";
+import redisClient from "../config/redis.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+import { ApiError } from "../utils/ApiError.js";
+import { ApiResponse } from "../utils/ApiResponse.js";
 
-// --- CREATE SUBMISSION (Producer) ---
-export const createSubmission = async (req, res) => {
+export const createSubmission = asyncHandler(async (req, res) => {
     const { slug, language, code } = req.body;
     const userId = req.userId;
 
-    if (!language || !code || !slug) {
-        return res.status(400).json({ message: "Invalid input." });
+    if (!code || code.length > 20000) throw new ApiError(413, "Code exceeds 20KB limit.");
+
+    // FIX : Circuit Breaker Check
+    const circuitOpen = await redisClient.get("circuit_breaker:judge0");
+    if (circuitOpen) {
+        throw new ApiError(503, "Execution engine is temporarily pausing to recover. Try again in 30s.");
     }
 
-    try {
-        // 1. Verify Problem Exists
-        const problem = await Problem.findOne({ slug }).select("_id");
-        if (!problem) return res.status(404).json({ message: "Problem not found." });
+    // FIX : Queue Backpressure Guard (Max Depth)
+    const waitingCount = await dispatchQueue.getWaitingCount();
+    if (waitingCount > 5000) {
+        throw new ApiError(503, "System is at maximum capacity. Please try again shortly.");
+    }
 
-        // 2. Create "Placeholder" Submission in DB
-        const newSubmission = new Submission({
-            user: userId,
-            problem: problem._id,
-            code: code,
-            language: language,
-            status: "Queued", // Starts as Queued
-            judge0Tokens: [],
-            results: []
+    // FIX : Atomic Rate Limiting (Redis MULTI)
+    const rateKey = `rate:sub:${userId}`;
+    const multiResponse = await redisClient.multi()
+        .incr(rateKey)
+        .expire(rateKey, 60, 'NX') 
+        .exec();
+    
+    const subsCount = multiResponse[0][1]; 
+    if (subsCount > 10) throw new ApiError(429, "Too many submissions. Please wait a minute.");
+
+    const problem = await Problem.findOne({ slug, isDeleted: { $ne: true } }).select("_id").lean();
+    if (!problem) throw new ApiError(404, "Problem not found.");
+
+    // FIX : Relies on the Partial Unique Index in MongoDB
+    // 
+    let newSubmission;
+    try {
+        newSubmission = await Submission.create({
+            user: userId, problem: problem._id, code, language, status: "Queued"
         });
-        await newSubmission.save();
-
-        // 3. Add to Redis Queue
-        // The Worker will pick this up and handle ALL Judge0 communication
-        await submissionQueue.add("process-submission", {
-            submissionId: newSubmission._id,
-            code,
-            language,
-            slug,
-            userId // Pass userId so Worker can send Socket event
-        });
-
-        // 4. Return immediately!
-        return res.status(201).json(newSubmission);
-
     } catch (error) {
-        console.error("Queue Error:", error);
-        return res.status(500).json({ message: "Server error" });
+        if (error.code === 11000) throw new ApiError(429, "You already have an evaluation in progress for this problem.");
+        throw error;
     }
-};
 
-// --- GET SUBMISSION STATUS ---
-export const getSubmissionStatus = async (req, res) => {
+    // Enqueue
     try {
-        const { submissionId } = req.params;
-        const userId = req.userId;
-
-        const submission = await Submission.findOne({ _id: submissionId, user: userId });
-
-        if (!submission) {
-            return res.status(404).json({ message: "Submission not found." });
-        }
-        return res.status(200).json(submission);
-
+        await dispatchQueue.add("dispatch-judge", {
+            submissionId: newSubmission._id, code, language, slug, userId
+        }, { attempts: 3, backoff: { type: 'exponential', delay: 1000 } });
     } catch (error) {
-        return res.status(500).json({ message: error.message });
+        await Submission.findByIdAndUpdate(newSubmission._id, { status: "Internal Error" });
+        throw new ApiError(503, "Failed to enqueue submission.");
     }
-};
 
-// ... GET SUBMISSION FOR PROBLEM ...
-export const getSubmissionsForProblem = async (req, res) => {
-    try {
-        const { slug } = req.params;
-        const userId = req.userId;
+    return res.status(201).json({ success: true, submissionId: newSubmission._id });
+});
 
-        const problem = await Problem.findOne({ slug: slug }).select("_id");
-        if (!problem) {
-            return res.status(404).json({ message: "Problem not found." });
-        }
+// ---  GET SUBMISSION STATUS (Fallback Polling) ---
+export const getSubmissionStatus = asyncHandler(async (req, res) => {
+    const { submissionId } = req.params;
+    
+    const submission = await Submission.findOne({ _id: submissionId, user: req.userId })
+        .select("-code -judge0Tokens") 
+        .lean();
 
-        const submissions = await Submission.find({
-            problem: problem._id,
-            user: userId
-        })
-        .select("status language createdAt score") 
-        .sort({ createdAt: -1 });
+    if (!submission) throw new ApiError(404, "Submission not found.");
+    return res.status(200).json(new ApiResponse(200, submission));
+});
 
-        return res.status(200).json(submissions);
+// ---  GET SUBMISSION HISTORY FOR PROBLEM PAGE ---
+export const getSubmissionsForProblem = asyncHandler(async (req, res) => {
+    const { slug } = req.params;
+    
+    const problem = await Problem.findOne({ slug, isDeleted: { $ne: true } }).select("_id").lean();
+    if (!problem) throw new ApiError(404, "Problem not found.");
 
-    } catch (error) {
-        console.error("Error fetching submissions:", error);
-        return res.status(500).json({ message: "Server error" });
-    }
-};
+    const submissions = await Submission.find({
+        problem: problem._id,
+        user: req.userId
+    })
+    .select("status language createdAt score executionTime memoryUsed") 
+    .sort({ createdAt: -1 }) 
+    .limit(50) 
+    .lean();
+
+    return res.status(200).json(new ApiResponse(200, submissions));
+});

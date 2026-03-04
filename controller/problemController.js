@@ -12,573 +12,417 @@ import {
   ALLOWED_COMPANY_TAGS,
   normalizeCompanyTag,
 } from "../config/companyTags.js";
+import redisClient from "../config/redis.js"; 
+import { asyncHandler } from "../utils/asyncHandler.js";
+import { ApiError } from "../utils/ApiError.js";
+import { ApiResponse } from "../utils/ApiResponse.js";
 
-// --- GET ALL PROBLEMS (with filtering) ---
-export const getAllProblems = async (req, res) => {
-  try {
-    const { difficulty, tags, company, search } = req.query;
-    const filter = {
-      isPublished: true,
-    };
 
-    if (
-      difficulty &&
-      ["Easy", "Medium", "Hard", "Super Hard"].includes(difficulty)
-    ) {
-      filter.difficulty = difficulty;
-    }
-    if (tags) {
-      const tagsArray = tags.split(",").map((tag) => tag.trim().toLowerCase());
-      filter.tags = { $all: tagsArray };
-    }
-    if (company) {
-      filter.companyTags = company.trim().toLowerCase();
-    }
-    if (search) {
-      filter.title = { $regex: search, $options: "i" };
-    }
-
-    const problems = await Problem.find(filter)
-      .select("title slug difficulty tags companyTags createdAt isPremium")
-      .sort({ createdAt: -1 });
-
-    return res.status(200).json(problems);
-  } catch (error) {
-    console.error("Error fetching problems:", error);
-    return res
-      .status(500)
-      .json({ message: `Error fetching problems: ${error.message}` });
-  }
+// FAANG Transaction Options
+const txnOptions = {
+    readConcern: { level: "snapshot" },
+    writeConcern: { w: "majority" }
 };
 
-// --- GET ALL PROBLEMS (with filtering) for admin only ---
-export const getAllProblemsAdmin = async (req, res) => {
-  try {
-    const { difficulty, tags, company, search } = req.query;
 
-    const filter = {}; 
+// --- 1. GET ALL PROBLEMS (Pagination, Text Index, Lean) --- done
+export const getAllProblems = asyncHandler(async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const { difficulty, tags, company, search } = req.query;
+    const filter = { 
+        isPublished: true, 
+        isDeleted: { $ne: true } 
+    }; 
 
     if (difficulty && ["Easy", "Medium", "Hard", "Super Hard"].includes(difficulty)) {
-      filter.difficulty = difficulty;
+        filter.difficulty = difficulty;
     }
     if (tags) {
-      const tagsArray = tags.split(",").map((tag) => tag.trim().toLowerCase());
-      filter.tags = { $all: tagsArray };
+        const tagsArray = tags.split(",").map(tag => tag.trim().toLowerCase());
+        filter.tags = { $all: tagsArray };
     }
-    if (company) {
-      filter.companyTags = company.trim().toLowerCase();
-    }
-    if (search) {
-      filter.title = { $regex: search, $options: "i" };
-    }
+    if (company) filter.companyTags = company.trim().toLowerCase();
+    
+    // Uses the text index (O(log N)) instead of regex (O(N) COLLSCAN)
+    if (search) filter.$text = { $search: search }; 
 
     const problems = await Problem.find(filter)
-      // --- SELECT "isPublished" FOR THE TABLE ---
-      .select("title slug difficulty tags companyTags createdAt isPremium isPublished")
-      .sort({ createdAt: -1 });
+        .select("title slug difficulty tags companyTags createdAt isPremium executionStats")
+        .sort({ isPublished: 1, createdAt: -1 }) 
+        .skip(skip)
+        .limit(limit)
+        .lean(); 
 
-    return res.status(200).json(problems);
-  } catch (error) {
-    console.error("Error fetching admin problems:", error);
-    return res
-      .status(500)
-      .json({ message: `Error fetching admin problems: ${error.message}` });
-  }
-};
+    return res.status(200).json(new ApiResponse(200, problems));
+});
 
-// --- GET SINGLE PROBLEM (Public - Excludes Sensitive Data) ---
-export const getProblemBySlug = async (req, res) => {
-  try {
+// ---  GET ALL PROBLEMS (Admin Only) --- done
+export const getAllProblemsAdmin = asyncHandler(async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50; 
+    const skip = (page - 1) * limit;
+
+    const { difficulty, tags, company, search } = req.query;
+    const filter = { 
+        isDeleted: { $ne: true } 
+    }; 
+
+    if (difficulty && ["Easy", "Medium", "Hard", "Super Hard"].includes(difficulty)) filter.difficulty = difficulty;
+    if (tags) filter.tags = { $all: tags.split(",").map(tag => tag.trim().toLowerCase()) };
+    if (company) filter.companyTags = company.trim().toLowerCase();
+    if (search) filter.$text = { $search: search }; 
+
+    const problems = await Problem.find(filter)
+        .select("title slug difficulty tags companyTags createdAt isPremium isPublished executionStats")
+        .sort({ isDeleted: 1, createdAt: -1 }) 
+        .skip(skip)
+        .limit(limit)
+        .lean(); 
+
+    return res.status(200).json(new ApiResponse(200, problems));
+});
+
+// ---  GET problem by slug  --- done 
+export const getProblemBySlug = asyncHandler(async (req, res) => {
     const { slug } = req.params;
-    const problem = await Problem.findOne({ slug: slug })
-      .populate({
-        path: "testCases",
-        match: { isSample: true }, 
-        select: "input expectedOutput _id",
-      })
-      // !!! SECURITY: Do not send driverCode to regular users !!!
-      .select("-solution -driverCode"); 
+    const cacheKey = `problem:${slug}`;
+
+    let cachedProblem = await redisClient.get(cacheKey);
+    if (cachedProblem) {
+        return res.status(200).json(new ApiResponse(200, cachedProblem));
+    }
+
+    //  Cache Miss
+    const lockKey = `lock:problem:${slug}`;
+    const gotLock = await redisClient.set(lockKey, "1", { nx: true, ex: 5 }); 
+
+    if (!gotLock) {
+        // Poll every 50ms, up to 4 times (200ms total wait)
+        for (let i = 0; i < 4; i++) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+            cachedProblem = await redisClient.get(cacheKey);
+            if (cachedProblem) {
+                return res.status(200).json(new ApiResponse(200, cachedProblem));
+            }
+        }
+    }
+
+    // DB Fetch 
+    const problem = await Problem.findOne({ slug, isDeleted: { $ne: true } })
+        .populate({
+            path: "testCases",
+            match: { isSample: true },
+            select: "input expectedOutput _id",
+        })
+        .select("-solution -driverCode")
+        .lean();
 
     if (!problem) {
-      return res.status(404).json({ message: "Problem not found" });
+        throw new ApiError(404, "Problem not found");
     }
-    return res.status(200).json(problem);
-  } catch (error) {
-    console.error("Error fetching problem by slug:", error);
-    return res
-      .status(500)
-      .json({ message: `Error fetching problem: ${error.message}` });
-  }
-};
 
-// --- NEW: GET SINGLE PROBLEM FOR EDITING (Admin Only) ---
-export const getProblemForEdit = async (req, res) => {
-  try {
+    // Cache and Release Lock 
+    if (gotLock) {
+    await redisClient.set(cacheKey, JSON.stringify(problem), { ex: 600 }); 
+    await redisClient.del(lockKey);
+}
+
+    return res.status(200).json(new ApiResponse(200, problem));
+});
+
+// ---  GET SINGLE PROBLEM FOR EDITING (Admin Only) ---
+export const getProblemForEdit = asyncHandler(async (req, res) => {
     const { slug } = req.params;
-    // Return EVERYTHING including driverCode and solution
-    const problem = await Problem.findOne({ slug: slug })
-      .populate("testCases");
+    
+    //  FIX: Changed 'false' to '{ $ne: true }' to catch older documents!
+    const problem = await Problem.findOne({ slug, isDeleted: { $ne: true } })
+        .populate({
+            path: "testCases",
+            select: "input expectedOutput isSample createdAt" 
+        })
+        .lean(); 
 
-    if (!problem) {
-      return res.status(404).json({ message: "Problem not found" });
-    }
-    return res.status(200).json(problem);
-  } catch (error) {
-    console.error("Error fetching problem for edit:", error);
-    return res
-      .status(500)
-      .json({ message: `Error fetching problem: ${error.message}` });
-  }
-};
+    if (!problem) throw new ApiError(404, "Problem not found");
+    
+    return res.status(200).json(new ApiResponse(200, problem));
+});
 
 // --- CREATE PROBLEM (Admin/Master Only) ---
-export const createProblem = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const {
-      title,
-      description,
-      difficulty,
-      tags,
-      companyTags,
-      starterCode,
-      driverCode,
-      testCasesData,
-      solution,
-      isPremium,
-      isPublished,
-      originContest,
-    } = req.body;
+export const createProblem = asyncHandler(async (req, res) => {
+    const session = await mongoose.startSession();
+    let createdProblem;
 
-    // Basic Validation
-    if (
-      !title ||
-      !description ||
-      !difficulty ||
-      !testCasesData ||
-      !Array.isArray(testCasesData) ||
-      testCasesData.length === 0 ||
-      !starterCode ||
-      !Array.isArray(starterCode) ||
-      starterCode.length === 0
-    ) {
-      throw new Error(
-        "Missing required fields: title, description, difficulty, starterCode, and at least one test case."
-      );
-    }
+    await session.withTransaction(async () => {
+        const { 
+            title, description, difficulty, tags, companyTags, 
+            starterCode, driverCode, testCasesData, solution, 
+            isPremium, isPublished, originContest 
+        } = req.body;
 
-    // Generate Slug
-    const generatedSlug = title
-      .toLowerCase()
-      .replace(/\s+/g, "-")
-      .replace(/[^\w-]+/g, "");
+        // Strict Basic Validation
+        if (!title || !description || !difficulty || !testCasesData || !Array.isArray(testCasesData) || testCasesData.length === 0 || !starterCode || !Array.isArray(starterCode) || starterCode.length === 0) {
+            throw new ApiError(400, "Missing required fields: title, description, difficulty, starterCode, and at least one test case.");
+        }
 
-    // Validate & Normalize Tags
-    let validatedTags = [];
-    if (tags && Array.isArray(tags)) {
-      validatedTags = tags
-        .map((tag) => normalizeProblemTag(tag))
-        .filter((tag) => tag !== null);
-      const invalidTags = validatedTags.filter(
-        (tag) => !ALLOWED_PROBLEM_TAGS.includes(tag)
-      );
-      if (invalidTags.length > 0)
-        throw new Error(`Invalid problem tags: ${invalidTags.join(", ")}`);
-    } else if (tags) throw new Error(`Problem tags must be an array.`);
+        // Validate & Normalize Problem Tags
+        let validatedTags = [];
+        if (tags && Array.isArray(tags)) {
+            validatedTags = tags.map(tag => normalizeProblemTag(tag)).filter(tag => tag !== null);
+            const invalidTags = validatedTags.filter(tag => !ALLOWED_PROBLEM_TAGS.includes(tag));
+            if (invalidTags.length > 0) throw new ApiError(400, `Invalid problem tags: ${invalidTags.join(", ")}`);
+        } else if (tags) throw new ApiError(400, "Problem tags must be an array.");
 
-    // Validate & Normalize Company Tags
-    let validatedCompanyTags = [];
-    if (companyTags && Array.isArray(companyTags)) {
-      validatedCompanyTags = companyTags
-        .map((tag) => normalizeCompanyTag(tag))
-        .filter((tag) => tag !== null);
-      const invalidCompanies = validatedCompanyTags.filter(
-        (tag) => !ALLOWED_COMPANY_TAGS.includes(tag)
-      );
-      if (invalidCompanies.length > 0)
-        throw new Error(`Invalid company tags: ${invalidCompanies.join(", ")}`);
-    } else if (companyTags) throw new Error(`Company tags must be an array.`);
+        // Validate & Normalize Company Tags
+        let validatedCompanyTags = [];
+        if (companyTags && Array.isArray(companyTags)) {
+            validatedCompanyTags = companyTags.map(tag => normalizeCompanyTag(tag)).filter(tag => tag !== null);
+            const invalidCompanies = validatedCompanyTags.filter(tag => !ALLOWED_COMPANY_TAGS.includes(tag));
+            if (invalidCompanies.length > 0) throw new ApiError(400, `Invalid company tags: ${invalidCompanies.join(", ")}`);
+        } else if (companyTags) throw new ApiError(400, "Company tags must be an array.");
 
-    // Check Duplicates
-    const existingProblem = await Problem.findOne({
-      $or: [{ title }, { slug: generatedSlug }],
-    }).session(session);
-    if (existingProblem) {
-      const field = existingProblem.title === title ? "title" : "slug";
-      throw new Error(`A problem with this ${field} already exists.`);
-    }
+        // Generate Slug & Check Duplicates
+        const generatedSlug = title.toLowerCase().replace(/\s+/g, "-").replace(/[^\w-]+/g, "");
+        const existingProblem = await Problem.findOne({ $or: [{ title }, { slug: generatedSlug }] }).session(session);
+        if (existingProblem) {
+            const field = existingProblem.title === title ? "title" : "slug";
+            throw new ApiError(400, `A problem with this ${field} already exists.`);
+        }
 
-    // Create Problem Doc
-    const newProblem = new Problem({
-      title,
-      slug: generatedSlug,
-      description,
-      difficulty,
-      tags: validatedTags,
-      companyTags: validatedCompanyTags,
-      starterCode,
-      driverCode: driverCode || [],
-      solution: solution || "",
-      isPremium: isPremium || false,
-      testCases: [],
-      isPublished: isPublished,
-      originContest: originContest || null,
-    });
-    await newProblem.save({ session });
+        // Create Problem Doc
+        const newProblem = new Problem({
+            title, slug: generatedSlug, description, difficulty,
+            tags: validatedTags, companyTags: validatedCompanyTags,
+            starterCode, driverCode: driverCode || [], solution: solution || "",
+            isPremium: isPremium || false, isPublished: isPublished,
+            originContest: originContest || null, testCases: []
+        });
+        await newProblem.save({ session });
 
-    // Create TestCase Docs
-    const testCaseDocsData = testCasesData.map((tc) => ({
-      problem: newProblem._id,
-      input: tc.input,
-      expectedOutput: tc.expectedOutput,
-      isSample: tc.isSample || false,
-    }));
-    const createdTestCases = await TestCase.insertMany(testCaseDocsData, {
-      session,
+        // Create & Link TestCases
+        const testCaseDocsData = testCasesData.map(tc => ({
+            problem: newProblem._id, input: tc.input, expectedOutput: tc.expectedOutput, isSample: tc.isSample || false
+        }));
+        const createdTestCases = await TestCase.insertMany(testCaseDocsData, { session });
+        
+        newProblem.testCases = createdTestCases.map(tc => tc._id);
+        await newProblem.save({ session });
+
+        createdProblem = newProblem;
     });
 
-    // Link TestCases back to Problem
-    newProblem.testCases = createdTestCases.map((tc) => tc._id);
-    await newProblem.save({ session });
-
-    // Handle Contest linking if needed (make sure Contest is imported)
-    /*
-    if (originContest && isPublished === false) {
-      await Contest.findByIdAndUpdate(
-        originContest,
-        { $push: { problems: { problem: newProblem._id } } },
-        { session }
-      );
-    }
-    */
-
-    // Commit Transaction
-    await session.commitTransaction();
-
-    // Populate response
-    await newProblem.populate({
-      path: "testCases",
-      match: { isSample: true },
-      select: "input expectedOutput _id",
-    });
-    return res.status(201).json(newProblem);
-  } catch (error) {
-    await session.abortTransaction();
-    console.error("Error creating problem:", error);
-    // Handle specific errors like validation or duplicates nicely
-    if (
-      error.message.includes("Invalid") ||
-      error.message.includes("Missing") ||
-      error.message.includes("already exists")
-    ) {
-      return res.status(400).json({ message: error.message });
-    }
-    return res
-      .status(500)
-      .json({ message: `Error creating problem: ${error.message}` });
-  } finally {
     session.endSession();
-  }
-};
+    return res.status(201).json(new ApiResponse(201, createdProblem, "Problem Created Successfully"));
+});
 
-// --- UPDATE PROBLEM DETAILS (Admin/Master Only) ---
-export const updateProblem = async (req, res) => {
-  const { slug } = req.params;
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const {
-      title,
-      description,
-      difficulty,
-      tags,
-      companyTags,
-      starterCode,
-      driverCode,
-      solution,
-      isPremium,
-      isPublished
-    } = req.body;
-    const problem = await Problem.findOne({ slug: slug }).session(session);
-    if (!problem) throw new Error("Problem not found with this slug.");
+// ---  UPDATE PROBLEM DETAILS (Admin/Master Only) ---
+export const updateProblem = asyncHandler(async (req, res) => {
+    const { slug } = req.params;
+    const session = await mongoose.startSession();
+    let updatedProblem;
+    let oldSlugToDelete = null;
 
-    // Handle Title/Slug Change
-    let newSlug = problem.slug;
-    if (title && title !== problem.title) {
-      newSlug = title
-        .toLowerCase()
-        .replace(/\s+/g, "-")
-        .replace(/[^\w-]+/g, "");
-      const existing = await Problem.findOne({
-        slug: newSlug,
-        _id: { $ne: problem._id },
-      }).session(session);
-      if (existing)
-        throw new Error(`Another problem exists with slug '${newSlug}'.`);
-      problem.title = title;
-      problem.slug = newSlug;
-    }
+    await session.withTransaction(async () => {
+        const problem = await Problem.findOne({ slug, isDeleted: { $ne: true } }).session(session);
+        if (!problem) throw new ApiError(404, "Problem not found");
 
-    // Validate & Normalize Tags
-    if (tags !== undefined) {
-      if (!Array.isArray(tags))
-        throw new Error(`Problem tags must be an array.`);
-      const validatedTags = tags
-        .map((tag) => normalizeProblemTag(tag))
-        .filter((tag) => tag !== null);
-      const invalidTags = validatedTags.filter(
-        (tag) => !ALLOWED_PROBLEM_TAGS.includes(tag)
-      );
-      if (invalidTags.length > 0)
-        throw new Error(`Invalid problem tags: ${invalidTags.join(", ")}`);
-      problem.tags = validatedTags;
-    }
+        const { title, description, difficulty, tags, companyTags, starterCode, driverCode, solution, isPremium, isPublished } = req.body;
 
-    // Validate & Normalize Company Tags
-    if (companyTags !== undefined) {
-      if (!Array.isArray(companyTags))
-        throw new Error(`Company tags must be an array.`);
-      const validatedCompanyTags = companyTags
-        .map((tag) => normalizeCompanyTag(tag))
-        .filter((tag) => tag !== null);
-      const invalidCompanies = validatedCompanyTags.filter(
-        (tag) => !ALLOWED_COMPANY_TAGS.includes(tag)
-      );
-      if (invalidCompanies.length > 0)
-        throw new Error(`Invalid company tags: ${invalidCompanies.join(", ")}`);
-      problem.companyTags = validatedCompanyTags;
-    }
+        // Handle Title/Slug Change & Duplication Check
+        if (title && title !== problem.title) {
+            const newSlug = title.toLowerCase().replace(/\s+/g, "-").replace(/[^\w-]+/g, "");
+            const existing = await Problem.findOne({ slug: newSlug, _id: { $ne: problem._id } }).session(session);
+            if (existing) throw new ApiError(400, `Another problem exists with slug '${newSlug}'.`);
+            
+            oldSlugToDelete = problem.slug;
+            problem.title = title;
+            problem.slug = newSlug;
+        }
 
-    // Update other fields
-    if (description !== undefined) problem.description = description;
-    if (difficulty !== undefined) problem.difficulty = difficulty;
-    if (starterCode !== undefined) problem.starterCode = starterCode;
-    if (solution !== undefined) problem.solution = solution;
-    if (isPremium !== undefined) {
-      problem.isPremium = Boolean(isPremium);
-    }
-    if (isPublished !== undefined) {
-      problem.isPublished = Boolean(isPublished); 
-    }
-    
-    // Update Driver Code
-    if (driverCode !== undefined) {
-        if (!Array.isArray(driverCode)) throw new Error("Driver code must be an array.");
-        problem.driverCode = driverCode;
-    }
+        // Validate & Normalize Tags
+        if (tags !== undefined) {
+            if (!Array.isArray(tags)) throw new ApiError(400, "Problem tags must be an array.");
+            const validatedTags = tags.map(tag => normalizeProblemTag(tag)).filter(tag => tag !== null);
+            const invalidTags = validatedTags.filter(tag => !ALLOWED_PROBLEM_TAGS.includes(tag));
+            if (invalidTags.length > 0) throw new ApiError(400, `Invalid problem tags: ${invalidTags.join(", ")}`);
+            problem.tags = validatedTags;
+        }
 
-    await problem.save({ session });
-    await session.commitTransaction();
+        // Validate & Normalize Company Tags
+        if (companyTags !== undefined) {
+            if (!Array.isArray(companyTags)) throw new ApiError(400, "Company tags must be an array.");
+            const validatedCompanyTags = companyTags.map(tag => normalizeCompanyTag(tag)).filter(tag => tag !== null);
+            const invalidCompanies = validatedCompanyTags.filter(tag => !ALLOWED_COMPANY_TAGS.includes(tag));
+            if (invalidCompanies.length > 0) throw new ApiError(400, `Invalid company tags: ${invalidCompanies.join(", ")}`);
+            problem.companyTags = validatedCompanyTags;
+        }
 
-    // Populate response
-    await problem.populate({
-      path: "testCases",
-      match: { isSample: true },
-      select: "input expectedOutput _id",
-    });
-    return res.status(200).json(problem);
-  } catch (error) {
-    await session.abortTransaction();
-    console.error("Error updating problem:", error);
-    if (
-      error.message.includes("Invalid") ||
-      error.message.includes("not found") ||
-      error.message.includes("exists")
-    ) {
-      return res.status(400).json({ message: error.message });
-    }
-    return res
-      .status(500)
-      .json({ message: `Error updating problem: ${error.message}` });
-  } finally {
+        // Update Other Fields
+        if (description !== undefined) problem.description = description;
+        if (difficulty !== undefined) problem.difficulty = difficulty;
+        if (starterCode !== undefined) problem.starterCode = starterCode;
+        if (solution !== undefined) problem.solution = solution;
+        if (isPremium !== undefined) problem.isPremium = Boolean(isPremium);
+        if (isPublished !== undefined) problem.isPublished = Boolean(isPublished);
+        if (driverCode !== undefined) {
+            if (!Array.isArray(driverCode)) throw new ApiError(400, "Driver code must be an array.");
+            problem.driverCode = driverCode;
+        }
+
+        // Save Updates
+        problem.updatedAt = new Date(); 
+        await problem.save({ session }); 
+        updatedProblem = problem;
+        
+    }); 
+
     session.endSession();
-  }
-};
+
+    // Redis Cache Cleanup 
+    if (oldSlugToDelete) {
+        await redisClient.del(`problem:${oldSlugToDelete}`);
+        await redisClient.del(`eval_data:${oldSlugToDelete}`);
+        await redisClient.del(`samples:${oldSlugToDelete}`);
+    }
+    await redisClient.del(`problem:${updatedProblem.slug}`);
+    await redisClient.del(`eval_data:${updatedProblem.slug}`);
+    await redisClient.del(`samples:${updatedProblem.slug}`);
+
+    return res.status(200).json(new ApiResponse(200, updatedProblem, "Problem updated successfully"));
+
+});
 
 // --- DELETE PROBLEM (Admin/Master Only) ---
-export const deleteProblem = async (req, res) => {
-  const { slug } = req.params;
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const problem = await Problem.findOneAndDelete({ slug: slug }).session(
-      session
+export const deleteProblem = asyncHandler(async (req, res) => {
+    const { slug } = req.params;
+
+    // soft deletee
+    // to achive o(1) complexity and save associated data deletion cost
+    const problem = await Problem.findOneAndUpdate(
+        { slug }, 
+        { isDeleted: true }, 
+        { new: true }
     );
-    if (!problem) {
-      // Commit and return 404 if not found
-      await session.commitTransaction();
-      session.endSession();
-      return res.status(404).json({ message: "Problem not found." });
-    }
 
-    // Delete associated Test Cases
-    await TestCase.deleteMany({ problem: problem._id }).session(session);
+    if (!problem) throw new ApiError(404, "Problem not found");
 
-    //  Delete associated Submissions
-    await Submission.deleteMany({ problem: problem._id }).session(session);
+    if (!problem) throw new ApiError(404, "Problem not found");
 
-    await session.commitTransaction();
-    session.endSession();
-    return res
-      .status(200)
-      .json({ message: "Problem and associated data deleted successfully." });
-  } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error("Error deleting problem:", error);
-    return res
-      .status(500)
-      .json({ message: `Error deleting problem: ${error.message}` });
-  }
-};
+    //  Clear all caches for the deleted problem
+    await redisClient.del(`problem:${slug}`);
+    await redisClient.del(`eval_data:${slug}`);
+    await redisClient.del(`samples:${slug}`);
 
-// get all testcase for a perticular problem
-export const getAllTestCasesForProblem = async (req, res) => {
-  const { slug } = req.params;
-  try {
-    // Find the problem first to get its ID
-    const problem = await Problem.findOne({ slug }).select("_id");
-    if (!problem) {
-      return res.status(404).json({ message: "Problem not found." });
-    }
+    return res.status(200).json(new ApiResponse(200, null, "Problem soft-deleted successfully"));
+
+    return res.status(200).json(new ApiResponse(200, null, "Problem soft-deleted successfully"));
+});
+
+// ---  GET ALL TEST CASES FOR PROBLEM ---
+export const getAllTestCasesForProblem = asyncHandler(async (req, res) => {
+    const { slug } = req.params;
+    
+    // FIX: Changed 'false' to '{ $ne: true }' 
+    const problem = await Problem.findOne({ slug, isDeleted: { $ne: true } }).select("_id").lean();
+    if (!problem) throw new ApiError(404, "Problem not found.");
 
     const testCases = await TestCase.find({ problem: problem._id })
-      .select("input expectedOutput isSample createdAt")
-      .sort({ createdAt: 1 });
+        .select("input expectedOutput isSample createdAt")
+        .sort({ createdAt: 1 }) 
+        .lean(); 
 
-    return res.status(200).json(testCases);
-  } catch (error) {
-    console.error("Error fetching all test cases for problem:", error);
-    return res
-      .status(500)
-      .json({ message: `Error fetching test cases: ${error.message}` });
-  }
-};
+    return res.status(200).json(new ApiResponse(200, testCases));
+});
 
-// --- ADD TEST CASE TO PROBLEM (Admin/Master Only) ---
-export const addTestCaseToProblem = async (req, res) => {
-  const { slug } = req.params;
-  const { input, expectedOutput, isSample } = req.body;
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    if (!input || expectedOutput === undefined) {
-      // Allow empty expected output
-      throw new Error("Input and Expected Output are required.");
-    }
-
-    const problem = await Problem.findOne({ slug }).session(session);
-    if (!problem) throw new Error("Problem not found.");
-
-    const newTestCase = new TestCase({
-      problem: problem._id,
-      input,
-      expectedOutput,
-      isSample: isSample || false,
-    });
-    await newTestCase.save({ session });
-
-    // Add to problem's array
-    await Problem.updateOne(
-      { _id: problem._id },
-      { $push: { testCases: newTestCase._id } }
-    ).session(session);
-
-    await session.commitTransaction();
-    session.endSession();
-    return res.status(201).json(newTestCase);
-  } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error("Error adding test case:", error);
-    if (
-      error.message.includes("required") ||
-      error.message.includes("not found")
-    ) {
-      return res.status(400).json({ message: error.message });
-    }
-    return res
-      .status(500)
-      .json({ message: `Error adding test case: ${error.message}` });
-  }
-};
-
-// --- DELETE TEST CASE FROM PROBLEM (Admin/Master Only) ---
-export const deleteTestCaseFromProblem = async (req, res) => {
-  const { testCaseId } = req.params;
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const testCase = await TestCase.findByIdAndDelete(testCaseId).session(
-      session
-    );
-    if (!testCase) {
-      await session.commitTransaction();
-      session.endSession();
-      return res.status(404).json({ message: "Test case not found." });
-    }
-
-    // Remove from the Problem's array
-    await Problem.updateOne(
-      { _id: testCase.problem },
-      { $pull: { testCases: testCaseId } }
-    ).session(session);
-
-    await session.commitTransaction();
-    session.endSession();
-    return res.status(200).json({ message: "Test case deleted successfully." });
-  } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error("Error deleting test case:", error);
-    return res
-      .status(500)
-      .json({ message: `Error deleting test case: ${error.message}` });
-  }
-};
-
-// --- GET PROBLEM SOLUTION ---------
-export const getProblemSolution = async (req, res) => {
-  try {
+// --- ADD TEST CASE (Atomic Concurrency Guard) ---
+export const addTestCaseToProblem = asyncHandler(async (req, res) => {
     const { slug } = req.params;
-    const userId = req.userId; // from isAuth
+    const { input, expectedOutput, isSample } = req.body;
 
-    // 1. Find the user and problem
-    const user = await User.findById(userId).select("role");
-    if (!user) return res.status(401).json({ message: "User not found." });
+    const problemInfo = await Problem.findOne({ slug, isDeleted: false }).select("_id maxTestCases").lean();
+    if (!problemInfo) throw new ApiError(404, "Problem not found");
 
-    const problem = await Problem.findOne({ slug }).select("_id solution");
-    if (!problem)
-      return res.status(404).json({ message: "Problem not found." });
+    const newTestCase = new TestCase({ problem: problemInfo._id, input, expectedOutput, isSample });
+    await newTestCase.save();
 
-    // 2. Check for Admin/Master role
-    if (user.role === "admin" || user.role === "master") {
-      return res.status(200).json({ solution: problem.solution });
+    // Prevents race conditions where 2 requests pass the length check simultaneously
+    const updatedProblem = await Problem.findOneAndUpdate(
+        { 
+            _id: problemInfo._id, 
+            $expr: { $lt: [{ $size: "$testCases" }, "$maxTestCases"] } 
+        },
+        { $addToSet: { testCases: newTestCase._id } },
+        { new: true }
+    );
+
+    if (!updatedProblem) {
+        // If it failed, it means the array hit the limit mid-flight.
+        // Clean up the orphaned testcase.
+        await TestCase.findByIdAndDelete(newTestCase._id);
+        throw new ApiError(400, `Cannot exceed maximum test cases limit.`);
     }
 
-    // 3. Check if user has an 'Accepted' submission for this problem
-    const acceptedSubmission = await Submission.findOne({
-      problem: problem._id,
-      user: userId,
-      status: "Accepted",
-    });
+    //  Clear the evaluation caches so workers fetch the new testcase
+    await redisClient.del(`eval_data:${slug}`);
+    await redisClient.del(`samples:${slug}`);
 
-    if (acceptedSubmission) {
-      return res.status(200).json({ solution: problem.solution });
+    return res.status(201).json(new ApiResponse(201, newTestCase));
+});
+
+// ---  DELETE TEST CASE FROM PROBLEM (Admin/Master Only) ---
+export const deleteTestCaseFromProblem = asyncHandler(async (req, res) => {
+    const { testCaseId } = req.params;
+    const session = await mongoose.startSession();
+
+    await session.withTransaction(async () => {
+        const updatedProblem = await Problem.findOneAndUpdate(
+            { testCases: testCaseId }, 
+            { 
+                $pull: { testCases: testCaseId },
+                $set: { updatedAt: new Date() } 
+            },
+            { session, new: true }
+        );
+
+        if (!updatedProblem) throw new ApiError(404, "Test case not linked to any active problem");
+
+        await TestCase.findByIdAndDelete(testCaseId).session(session);
+        
+    }, txnOptions); 
+    session.endSession();
+
+    if (updatedProblem && updatedProblem.slug) {
+        await redisClient.del(`eval_data:${updatedProblem.slug}`);
+        await redisClient.del(`samples:${updatedProblem.slug}`);
     }
 
-    // 5. If none of the above, deny access
-    return res
-      .status(403)
-      .json({
-        message:
-          "You must successfully solve this problem to view the solution.",
-      });
-  } catch (error) {
-    console.error("Error fetching solution:", error);
-    return res
-      .status(500)
-      .json({ message: `Error fetching solution: ${error.message}` });
-  }
-};
+    return res.status(200).json(new ApiResponse(200, null, "Test case deleted successfully."));
+});
+
+// ---  GET SOLUTION (Parallel I/O) ---
+export const getProblemSolution = asyncHandler(async (req, res) => {
+    const { slug } = req.params;
+    const userId = req.userId; 
+
+    const problem = await Problem.findOne({ slug, isDeleted: false }).select("_id solution").lean();
+    if (!problem) throw new ApiError(404, "Problem not found");
+
+    const cacheKey = `solution_unlock:${userId}:${problem._id}`;
+    
+    // Parallelize the Redis Cache lookup and the MongoDB Submission lookup
+    const [isUnlocked, acceptedSubmission] = await Promise.all([
+        redisClient.get(cacheKey),
+        Submission.findOne({ problem: problem._id, user: userId, status: "Accepted" }).lean() 
+    ]);
+
+    if (isUnlocked === "1" || acceptedSubmission || req.userRole === "admin" || req.userRole === "master") {
+        if (!isUnlocked && acceptedSubmission) {
+            redisClient.set(cacheKey, "1", { ex: 86400 * 30 }); 
+        }
+        return res.status(200).json(new ApiResponse(200, { solution: problem.solution }));
+    }
+
+    throw new ApiError(403, "You must successfully solve this problem to view the solution.");
+});

@@ -4,13 +4,15 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "worker": "node worker.js"
   },
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
     "@google/genai": "^1.30.0",
+    "@upstash/redis": "^1.36.3",
     "axios": "^1.12.2",
     "bcryptjs": "^3.0.2",
     "bullmq": "^5.66.4",

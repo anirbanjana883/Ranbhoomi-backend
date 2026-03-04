@@ -2,88 +2,79 @@ import ContestSubmission from "../models/contestSubmissionModel.js";
 import ContestRanking from "../models/contestRankingModel.js"; 
 import Contest from "../models/contestModel.js";
 import User from "../models/userModel.js";
+import redisClient from "../config/redis.js"; // Upstash HTTP client
 
-// ✅ 1. NEW FUNCTION: Called by your Worker to update a single user's rank
+// ✅ 1. WORKER FUNCTION: Live Updates
 export const updateLeaderboard = async (contestId, userId, userName, problemScore) => {
   try {
-    // Get contest start time for penalty calculation
-    const contest = await Contest.findById(contestId).select("startDate");
-    if (!contest) throw new Error("Contest not found");
+    // 🔥 Fast Lean fetch
+    const contest = await Contest.findById(contestId).select("startDate").lean();
+    if (!contest) return;
 
     const contestStart = new Date(contest.startDate).getTime();
     
-    // Fetch ALL submissions for this user in this contest
+    // 🔥 Lean is mandatory here to prevent RAM bloat
     const submissions = await ContestSubmission.find({ 
       contest: contestId, 
       user: userId 
-    }).sort({ createdAt: "asc" });
+    }).sort({ createdAt: 1 }).lean(); 
 
     let totalScore = 0;
     let totalPenalty = 0;
-    const problemResults = new Map(); // Track problem status
+    const problemResults = new Map();
 
     for (const sub of submissions) {
       const problemId = sub.problem.toString();
-      
-      // If problem is already accepted, ignore later submissions
       if (problemResults.get(problemId)?.status === "Accepted") continue;
 
-      const submissionTimeInMinutes = Math.max(
-        0,
-        Math.floor((new Date(sub.createdAt).getTime() - contestStart) / (1000 * 60))
-      );
-
+      const submissionTimeInMinutes = Math.max(0, Math.floor((new Date(sub.createdAt).getTime() - contestStart) / 60000));
       const currentData = problemResults.get(problemId) || { penalty: 0 };
 
       if (sub.status === "Accepted") {
-        // Accepted: Add time penalty + wrong attempt penalties
         const finalPenalty = currentData.penalty + submissionTimeInMinutes;
-        
         problemResults.set(problemId, { status: "Accepted", penalty: finalPenalty });
         totalScore += sub.score || 10; 
         totalPenalty += finalPenalty;
       } else if (sub.status !== "Judging" && sub.status !== "Pending") {
-        // Wrong Answer: Add 20 min penalty (only applies if eventually accepted)
-        problemResults.set(problemId, { 
-          status: "Attempted", 
-          penalty: currentData.penalty + 20 
-        });
+        problemResults.set(problemId, { status: "Attempted", penalty: currentData.penalty + 20 });
       }
     }
 
-    // Save/Update the ranking entry in the DB
+    // 1. Update MongoDB (Durability)
     await ContestRanking.findOneAndUpdate(
       { contest: contestId, user: userId },
       {
-        user: userId,
-        userName: userName,
-        contest: contestId,
-        totalScore: totalScore,
-        totalPenalty: totalPenalty,
+        user: userId, userName, contest: contestId,
+        totalScore, totalPenalty,
         solvedCount: Array.from(problemResults.values()).filter(p => p.status === "Accepted").length,
         updatedAt: new Date()
       },
       { upsert: true, new: true }
     );
 
-    console.log(`📊 Leaderboard updated for ${userName}: Score ${totalScore}`);
+    // 🔥 2. Push to Redis Live Leaderboard (System 3)
+    // We combine score & penalty into a single float for Redis sorting: Score.InversePenalty
+    // Example: Score 100, Penalty 20 -> 100.000000 - (20/100000) -> 99.99980
+    // This allows Redis to sort by Score DESC, then Penalty ASC automatically.
+    const redisScore = totalScore - (totalPenalty / 1000000);
+    await redisClient.zadd(`live_leaderboard:${contestId}`, { score: redisScore, member: userId });
 
   } catch (error) {
     console.error("Error updating leaderboard:", error);
   }
 };
 
-// ✅ 2. YOUR EXISTING FUNCTION (For fetching full rankings)
+
+// ✅ 2. FINALIZER FUNCTION: OOM Protected
 export const calculateContestRanking = async (contestId, startTime) => {
-  // Fetch all relevant submissions
+  // 🔥 LEAN IS MANDATORY HERE to prevent crashing the server
   const submissions = await ContestSubmission.find({ contest: contestId })
     .select("user problem status createdAt points score") 
-    .sort({ createdAt: "asc" });
+    .sort({ createdAt: 1 })
+    .lean();
 
   const contestStart = new Date(startTime).getTime();
   const penaltyPerWrong = 20;
-
-  // Map<userId, { user, totalScore, totalPenalty, problemResults }>
   const userScores = new Map();
 
   for (const sub of submissions) {
@@ -91,50 +82,22 @@ export const calculateContestRanking = async (contestId, startTime) => {
     const problemId = sub.problem.toString();
 
     if (!userScores.has(userId)) {
-      userScores.set(userId, {
-        user: sub.user, 
-        totalScore: 0,
-        totalPenalty: 0,
-        problemResults: new Map(),
-      });
+      userScores.set(userId, { user: sub.user, totalScore: 0, totalPenalty: 0, problemResults: new Map() });
     }
 
     const userData = userScores.get(userId);
+    if (userData.problemResults.get(problemId)?.status === "Accepted") continue;
 
-    if (
-      userData.problemResults.has(problemId) &&
-      userData.problemResults.get(problemId).status === "Accepted"
-    ) {
-      continue;
-    }
-
-    const submissionTimeInMinutes = Math.max(
-      0,
-      Math.floor((new Date(sub.createdAt).getTime() - contestStart) / (1000 * 60))
-    );
-
-    const currentProblemData = userData.problemResults.get(problemId) || {
-      penalty: 0,
-      status: "Not Attempted",
-    };
+    const submissionTimeInMinutes = Math.max(0, Math.floor((new Date(sub.createdAt).getTime() - contestStart) / 60000));
+    const currentProblemData = userData.problemResults.get(problemId) || { penalty: 0, status: "Not Attempted" };
 
     if (sub.status === "Accepted") {
       const finalPenalty = currentProblemData.penalty + submissionTimeInMinutes;
-
-      userData.problemResults.set(problemId, {
-        status: "Accepted",
-        penalty: finalPenalty,
-        submissionTime: submissionTimeInMinutes,
-      });
-
+      userData.problemResults.set(problemId, { status: "Accepted", penalty: finalPenalty, submissionTime: submissionTimeInMinutes });
       userData.totalScore += sub.points || sub.score || 10;
       userData.totalPenalty += finalPenalty;
     } else if (sub.status !== "Judging" && sub.status !== "Pending") {
-      userData.problemResults.set(problemId, {
-        status: "Attempted",
-        penalty: currentProblemData.penalty + penaltyPerWrong,
-        submissionTime: 0,
-      });
+      userData.problemResults.set(problemId, { status: "Attempted", penalty: currentProblemData.penalty + penaltyPerWrong, submissionTime: 0 });
     }
   }
 
@@ -142,10 +105,7 @@ export const calculateContestRanking = async (contestId, startTime) => {
     user: u.user,
     totalScore: u.totalScore,
     totalPenalty: Math.round(u.totalPenalty),
-    problemResults: Array.from(u.problemResults.entries()).map(([p, data]) => ({
-      problem: p,
-      ...data,
-    })),
+    problemResults: Array.from(u.problemResults.entries()).map(([p, data]) => ({ problem: p, ...data })),
   }));
   
   await User.populate(rankingsArray, { path: "user", select: "username name photoUrl" });

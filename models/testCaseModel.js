@@ -5,7 +5,6 @@ const testCaseSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: "Problem",
         required: true,
-        index: true,
     },
     input: {
         type: String,
@@ -23,6 +22,8 @@ const testCaseSchema = new mongoose.Schema({
 }, {
     timestamps: true,
 });
+
+testCaseSchema.index({ problem: 1, createdAt: 1 });
 
 const TestCase = mongoose.model("TestCase", testCaseSchema);
 export default TestCase;

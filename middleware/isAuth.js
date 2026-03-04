@@ -11,6 +11,8 @@ const isAuth = (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
+    req.userRole = decoded.role;
+
     if (!decoded || !decoded.userId) {
       return res.status(403).json({ message: "Invalid or expired token" });
     }

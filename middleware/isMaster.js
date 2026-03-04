@@ -2,12 +2,10 @@ import User from "../models/userModel.js";
 
 const isMaster = async (req, res, next) => {
   try {
-    const user = await User.findById(req.userId);
-
-    if (!user || user.role !== "master") {
-      return res.status(403).json({ message: "Access denied, master only" });
+    // Zero DB queries - roll is checked by the role attached by isAuth
+    if (!req.userRole || req.userRole !== "master") {
+      return res.status(403).json({ message: "Access denied. Admin or Master role required." });
     }
-
     next();
   } catch (error) {
     console.error("isMaster Middleware Error:", error);

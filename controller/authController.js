@@ -65,7 +65,7 @@ export const signup = async (req, res) => {
       role: "user",
     });
 
-    const token = await genToken(user._id);
+    const token = await genToken(user._id, user.role);
 
     // ✅ USED DYNAMIC COOKIE OPTIONS
     res.cookie("token", token, cookieOptions);
@@ -100,7 +100,7 @@ export const logIn = async (req, res) => {
     if (!isMatch)
       return res.status(400).json({ message: "Incorrect Password" });
 
-    const token = await genToken(user._id);
+    const token = await genToken(user._id, user.role);
 
     // ✅ USED DYNAMIC COOKIE OPTIONS
     res.cookie("token", token, cookieOptions);
