@@ -15,32 +15,32 @@ import isAuth from "../middleware/isAuth.js";
 import isAdmin from "../middleware/isAdmin.js"; 
 import isPremium from "../middleware/isPremium.js";
 
-const contestRouter = express.Router();
+const router = express.Router();
 
-// --- Public Route ---
+// ==========================================
+// 1. PUBLIC ROUTES (No Auth Required)
+// ==========================================
+router.get("/", getAllContests);
+router.get("/:slug/ranking", getRanking); // Leaderboard is public
 
-contestRouter.get("/", getAllContests);
+// ==========================================
+// 2. STANDARD USER ROUTES (Auth Required)
+// ==========================================
+router.get("/:slug", isAuth, getContestDetails); 
+router.post("/:slug/register", isAuth, registerForContest);
 
-contestRouter.post("/private", isAuth, isPremium, createPrivateContest);
+// ==========================================
+// 3. PREMIUM USER ROUTES (Auth + Premium)
+// ==========================================
+router.post("/private", isAuth, isPremium, createPrivateContest);
+router.put("/private/:slug", isAuth, isPremium, updatePrivateContest);
 
-contestRouter.put("/private/:slug", isAuth, isPremium, updatePrivateContest);
+// ==========================================
+// 4. ADMIN / MASTER ROUTES (Auth + Admin)
+// ==========================================
+router.post("/", isAuth, isAdmin, createContest);
+router.put("/:slug", isAuth, isAdmin, updateContest);
+router.delete("/:slug", isAuth, isAdmin, deleteContest);
+router.post("/:slug/calculate", isAuth, isAdmin, calculateRanking); 
 
-// --- Admin/Master Only Route ---
-
-contestRouter.post("/", isAuth, isAdmin, createContest);
-
-contestRouter.put("/:slug", isAuth, isAdmin, updateContest);
-
-contestRouter.delete("/:slug", isAuth, isAdmin, deleteContest);
-
-contestRouter.post("/:slug/calculate", isAuth, isAdmin, calculateRanking); 
-
-contestRouter.get("/:slug/ranking", getRanking);
-
-// --- User Routes  ---
-
-contestRouter.get("/:slug", isAuth, getContestDetails);
-
-contestRouter.post("/:slug/register", isAuth, registerForContest);
-
-export default contestRouter;
+export default router;

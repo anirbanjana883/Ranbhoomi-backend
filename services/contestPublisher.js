@@ -1,5 +1,5 @@
 import Contest from "../models/contestModel.js";
-import Problem from "../models/problemModel.js"; // Fixed case to match our earlier update
+import Problem from "../models/problemModel.js"; 
 import mongoose from "mongoose";
 
 export const publishEndedContestProblems = async () => {

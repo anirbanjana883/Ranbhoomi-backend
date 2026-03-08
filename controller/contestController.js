@@ -3,583 +3,366 @@ import Problem from "../models/problemModel.js";
 import User from "../models/userModel.js";
 import ContestSubmission from "../models/contestSubmissionModel.js";
 import ContestRanking from "../models/contestRankingModel.js";
+import ContestRegistration from "../models/contestRegistrationModel.js";
 import mongoose from "mongoose";
 import { randomBytes } from "crypto";
-import redis from "../config/redis.js";
+import redisClient from "../config/redis.js"; 
 import * as rankingService from "../services/rankingService.js";
 
+// --- IMPORT UTILITIES ---
+import { ApiError } from "../utils/ApiError.js";
+import { ApiResponse } from "../utils/ApiResponse.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+
 // --- CREATE CONTEST (Admin/Master Only) ---
-export const createContest = async (req, res) => {
-  try {
+export const createContest = asyncHandler(async (req, res) => {
     const { title, description, startTime, endTime, problemIds } = req.body;
     const createdBy = req.userId;
 
-    // --- Basic Validation ---
+    //  Basic Field Validation
     if (!title || !description || !startTime || !endTime) {
-      return res
-        .status(400)
-        .json({
-          message: "Title, description, start time, and end time are required.",
-        });
+        throw new ApiError(400, "Title, description, start time, and end time are required.");
     }
 
-    // --- Slug Generation ---
-    const slug = title
-      .toLowerCase()
-      .replace(/\s+/g, "-")
-      .replace(/[^\w-]+/g, "");
-
-    // --- Check for Duplicate Title/Slug ---
-    const existingContest = await Contest.findOne({
-      $or: [{ title }, { slug }],
-    });
-    if (existingContest) {
-      return res
-        .status(400)
-        .json({ message: "A contest with this title or slug already exists." });
-    }
-
-    // --- Validate Problems ---
-    if (!problemIds || !Array.isArray(problemIds) || problemIds.length === 0) {
-      return res
-        .status(400)
-        .json({ message: "At least one problem ID is required." });
-    }
-
-    // Check if all problem IDs are valid and exist in the Problem collection
-    const foundProblems = await Problem.find({
-      _id: { $in: problemIds },
-    }).select("_id");
-    if (foundProblems.length !== problemIds.length) {
-      // Find which problems were not found (for a better error message)
-      const foundIds = foundProblems.map((p) => p._id.toString());
-      const missingIds = problemIds.filter((id) => !foundIds.includes(id));
-      return res
-        .status(400)
-        .json({
-          message: `The following problem IDs are invalid or not found: ${missingIds.join(
-            ", "
-          )}`,
-        });
-    }
-
-    // Format problems for the schema
-    const problems = problemIds.map((id) => ({ problem: id }));
-
-    // --- Create Contest ---
-    const newContest = new Contest({
-      title,
-      slug,
-      description,
-      startTime,
-      endTime,
-      problems,
-      createdBy,
-      registeredUsers: [], // Starts empty
-    });
-
-    await newContest.save();
-
-    return res.status(201).json(newContest);
-  } catch (error) {
-    console.error("Error creating contest:", error);
-    return res
-      .status(500)
-      .json({ message: `Error creating contest: ${error.message}` });
-  }
-};
-
-// --- CREATE PRIVATE CONTEST (Premium Users Only) ---
-export const createPrivateContest = async (req, res) => {
-  try {
-    const { title, description, startTime, endTime, problemIds } = req.body;
-    const createdBy = req.userId;
-
-    if (!title || !startTime || !endTime) {
-      return res
-        .status(400)
-        .json({ message: "Title, start time, and end time are required." });
-    }
-
-    // ---  Generate Invite Code (6 Char) ---
-    const inviteCode = randomBytes(3).toString("hex").toUpperCase();
-
-    // --- Generate Unique Slug ---
-    let rawSlug = title
-      .toLowerCase()
-      .replace(/\s+/g, "-")
-      .replace(/[^\w-]+/g, "");
-    const slug = `${rawSlug}-${inviteCode.toLowerCase()}`;
-
-    // --- Validate Problems ---
-    if (!problemIds || !Array.isArray(problemIds) || problemIds.length === 0) {
-      return res
-        .status(400)
-        .json({ message: "At least one problem ID is required." });
-    }
-
-    // Check if problems exist in DB
-    const foundProblems = await Problem.find({
-      _id: { $in: problemIds },
-    }).select("_id");
-    if (foundProblems.length !== problemIds.length) {
-      const foundIds = foundProblems.map((p) => p._id.toString());
-      const missingIds = problemIds.filter((id) => !foundIds.includes(id));
-      return res
-        .status(400)
-        .json({ message: `Invalid Problem IDs: ${missingIds.join(", ")}` });
-    }
-
-    // Format for Schema
-    const problems = problemIds.map((id) => ({ problem: id }));
-
-    // --- Create Contest (Force PRIVATE) ---
-    const newContest = new Contest({
-      title,
-      slug,
-      description: description || "Private Contest",
-      startTime,
-      endTime,
-      problems,
-      createdBy,
-      visibility: "PRIVATE",
-      inviteCode: inviteCode,
-      registeredUsers: [],
-    });
-
-    await newContest.save();
-
-    return res.status(201).json({
-      message: "Private contest created successfully",
-      contestId: newContest._id,
-      inviteCode: newContest.inviteCode,
-      slug: newContest.slug,
-    });
-  } catch (error) {
-    console.error("Error creating private contest:", error);
-    return res
-      .status(500)
-      .json({ message: `Error creating contest: ${error.message}` });
-  }
-};
-
-// --- UPDATE PRIVATE CONTEST (User Only) ---
-export const updatePrivateContest = async (req, res) => {
-  try {
-    const { slug } = req.params;
-    const { title, description, startTime, endTime, problemIds } = req.body;
-    const userId = req.userId;
-
-    //  Find the contest
-    const contest = await Contest.findOne({ slug });
-    if (!contest) return res.status(404).json({ message: "Contest not found" });
-
-    //  OWNERSHIP CHECK (Crucial)
-    if (contest.createdBy.toString() !== userId) {
-      return res
-        .status(403)
-        .json({ message: "You do not have permission to edit this contest." });
-    }
-
-    //  TIME CHECK (Integrity)
-    if (new Date() >= new Date(contest.startTime)) {
-      return res
-        .status(400)
-        .json({ message: "Cannot edit a contest that has already started." });
-    }
-
-    //  Validate Problems
-    if (!problemIds || !Array.isArray(problemIds) || problemIds.length === 0) {
-      return res
-        .status(400)
-        .json({ message: "At least one problem ID is required." });
-    }
-
-    // Check if problems exist in DB
-    const foundProblems = await Problem.find({
-      _id: { $in: problemIds },
-    }).select("_id");
-    if (foundProblems.length !== problemIds.length) {
-      const foundIds = foundProblems.map((p) => p._id.toString());
-      const missingIds = problemIds.filter((id) => !foundIds.includes(id));
-      return res
-        .status(400)
-        .json({ message: `Invalid Problem IDs: ${missingIds.join(", ")}` });
-    }
-
-    // 5. Update Fields
-    contest.title = title || contest.title;
-    contest.description = description || contest.description;
-    contest.startTime = startTime || contest.startTime;
-    contest.endTime = endTime || contest.endTime;
-
-    if (problemIds && problemIds.length > 0) {
-      contest.problems = problemIds.map((id) => ({ problem: id }));
-    }
-
-    await contest.save();
-
-    res.json({ message: "Contest updated successfully", contest });
-  } catch (error) {
-    console.error("Update Private Contest Error:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-};
-
-// --- GET ALL CONTESTS (Public) ---
-export const getAllContests = async (req, res) => {
-  try {
+    //  Strict Time Validation
+    const start = new Date(startTime);
+    const end = new Date(endTime);
     const now = new Date();
 
-    // Fetch all contests, split into categories
-    const allContests = await Contest.find({})
-      .select("title slug description startTime endTime")
-      .sort({ startTime: -1 }); // Newest start times first
+    if (start < now) {
+        throw new ApiError(400, "Contest start time must be in the future.");
+    }
+    if (end <= start) {
+        throw new ApiError(400, "Contest end time must be after the start time.");
+    }
 
-    // Categorize them
-    const upcoming = allContests.filter((c) => new Date(c.startTime) > now);
-    const live = allContests.filter(
-      (c) => new Date(c.startTime) <= now && new Date(c.endTime) > now
-    );
-    const past = allContests.filter((c) => new Date(c.endTime) <= now);
+    //  Slug Generation & Uniqueness Check
+    const slug = title.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^\w-]+/g, "");
+    
+    const existingContest = await Contest.findOne({ $or: [{ title }, { slug }] }).lean();
+    if (existingContest) {
+        throw new ApiError(400, "A contest with this title or slug already exists.");
+    }
 
-    return res.status(200).json({ upcoming, live, past });
-  } catch (error) {
-    console.error("Error fetching contests:", error);
-    return res
-      .status(500)
-      .json({ message: `Error fetching contests: ${error.message}` });
-  }
-};
+    //  Problem Array Validation
+    if (!problemIds || !Array.isArray(problemIds) || problemIds.length === 0) {
+        throw new ApiError(400, "At least one problem ID is required.");
+    }
 
-// --- GET SINGLE CONTEST DETAILS (Auth User) ---
-export const getContestDetails = async (req, res) => {
-  try {
-    const { slug } = req.params;
-    const userId = req.userId;
+    // chekk: problems exist, are NOT published, and NOT deleted
+    const validProblems = await Problem.find({ 
+        _id: { $in: problemIds },
+        isPublished: false,
+        isDeleted: { $ne: true }
+    }).select("_id").lean();
 
-    //  Find the contest and populate its problems in one query
-    const contest = await Contest.findOne({ slug: slug }).populate({
-      path: "problems.problem",
-      select: "title slug difficulty tags isPremium",
+    if (validProblems.length !== problemIds.length) {
+        const validIds = validProblems.map(p => p._id.toString());
+        const invalidIds = problemIds.filter(id => !validIds.includes(id));
+        
+        throw new ApiError(400, `Invalid selection. The following problems are either already published, deleted, or do not exist: ${invalidIds.join(", ")}`);
+    }
+
+    //  Map to schema structure
+    const problems = problemIds.map((id) => ({ problem: id }));
+
+    //  Create the Contest
+    const newContest = await Contest.create({
+        title, 
+        slug, 
+        description, 
+        startTime: start, 
+        endTime: end, 
+        problems, 
+        createdBy
     });
 
-    if (!contest) {
-      return res.status(404).json({ message: "Contest not found." });
-    }
+    return res.status(201).json(new ApiResponse(201, newContest, "Contest created securely and successfully."));
+});
 
-    //  Safely check if the user is registered.
-    let isRegistered = false;
-    if (userId && contest.registeredUsers) {
-      isRegistered = contest.registeredUsers.some((id) => id.equals(userId));
-    }
+// --- CREATE PRIVATE CONTEST (Premium Users Only) ---
+export const createPrivateContest = asyncHandler(async (req, res) => {
+  const { title, description, startTime, endTime, problemIds } = req.body;
+  const createdBy = req.userId;
 
-    //  Convert to a plain object to add/remove fields
-    const contestObject = contest.toObject();
-
-    //  Add our new 'isRegistered' field
-    contestObject.isRegistered = isRegistered;
-
-    //  Securely remove the full list of registered users before sending
-    delete contestObject.registeredUsers;
-
-    return res.status(200).json(contestObject);
-  } catch (error) {
-    console.error("Error fetching contest details:", error);
-    return res
-      .status(500)
-      .json({ message: `Error fetching details: ${error.message}` });
+  if (!title || !startTime || !endTime) {
+    throw new ApiError(400, "Title, start time, and end time are required.");
   }
-};
+
+  const inviteCode = randomBytes(3).toString("hex").toUpperCase();
+  let rawSlug = title.toLowerCase().replace(/\s+/g, "-").replace(/[^\w-]+/g, "");
+  const slug = `${rawSlug}-${inviteCode.toLowerCase()}`;
+
+  if (!problemIds || !Array.isArray(problemIds) || problemIds.length === 0) {
+    throw new ApiError(400, "At least one problem ID is required.");
+  }
+
+  const foundProblems = await Problem.find({ _id: { $in: problemIds } }).select("_id");
+  if (foundProblems.length !== problemIds.length) {
+    const foundIds = foundProblems.map((p) => p._id.toString());
+    const missingIds = problemIds.filter((id) => !foundIds.includes(id));
+    throw new ApiError(400, `Invalid Problem IDs: ${missingIds.join(", ")}`);
+  }
+
+  const problems = problemIds.map((id) => ({ problem: id }));
+
+  const newContest = new Contest({
+    title, slug, description: description || "Private Contest",
+    startTime, endTime, problems, createdBy, visibility: "PRIVATE", inviteCode
+  });
+
+  await newContest.save();
+
+  return res.status(201).json(
+    new ApiResponse(201, { contestId: newContest._id, inviteCode, slug }, "Private contest created successfully")
+  );
+});
+
+// --- UPDATE PRIVATE CONTEST (User Only) ---
+export const updatePrivateContest = asyncHandler(async (req, res) => {
+  const { slug } = req.params;
+  const { title, description, startTime, endTime, problemIds } = req.body;
+  const userId = req.userId;
+
+  const contest = await Contest.findOne({ slug });
+  if (!contest) throw new ApiError(404, "Contest not found");
+
+  if (contest.createdBy.toString() !== userId) {
+    throw new ApiError(403, "You do not have permission to edit this contest.");
+  }
+
+  if (new Date() >= new Date(contest.startTime)) {
+    throw new ApiError(400, "Cannot edit a contest that has already started.");
+  }
+
+  if (!problemIds || !Array.isArray(problemIds) || problemIds.length === 0) {
+    throw new ApiError(400, "At least one problem ID is required.");
+  }
+
+  const foundProblems = await Problem.find({ _id: { $in: problemIds } }).select("_id");
+  if (foundProblems.length !== problemIds.length) {
+    const foundIds = foundProblems.map((p) => p._id.toString());
+    const missingIds = problemIds.filter((id) => !foundIds.includes(id));
+    throw new ApiError(400, `Invalid Problem IDs: ${missingIds.join(", ")}`);
+  }
+
+  contest.title = title || contest.title;
+  contest.description = description || contest.description;
+  contest.startTime = startTime || contest.startTime;
+  contest.endTime = endTime || contest.endTime;
+
+  if (problemIds && problemIds.length > 0) {
+    contest.problems = problemIds.map((id) => ({ problem: id }));
+  }
+
+  await contest.save();
+  return res.status(200).json(new ApiResponse(200, contest, "Contest updated successfully"));
+});
+
+// --- GET ALL CONTESTS (Public) ---
+export const getAllContests = asyncHandler(async (req, res) => {
+  const now = new Date();
+  const allContests = await Contest.find({})
+    .select("title slug description startTime endTime visibility")
+    .sort({ startTime: -1 });
+
+  const upcoming = allContests.filter((c) => new Date(c.startTime) > now);
+  const live = allContests.filter((c) => new Date(c.startTime) <= now && new Date(c.endTime) > now);
+  const past = allContests.filter((c) => new Date(c.endTime) <= now);
+
+  return res.status(200).json(new ApiResponse(200, { upcoming, live, past }, "Contests fetched successfully"));
+});
+
+// --- GET SINGLE CONTEST DETAILS (Auth User) ---
+export const getContestDetails = asyncHandler(async (req, res) => {
+  const { slug } = req.params;
+  const userId = req.userId;
+
+  const contest = await Contest.findOne({ slug }).populate({
+    path: "problems.problem",
+    select: "title slug difficulty tags isPremium",
+  });
+
+  if (!contest) throw new ApiError(404, "Contest not found.");
+
+  let isRegistered = false;
+  if (userId) {
+    const registration = await ContestRegistration.exists({ user: userId, contest: contest._id });
+    isRegistered = !!registration;
+  }
+
+  const contestObject = contest.toObject();
+  contestObject.isRegistered = isRegistered;
+  delete contestObject.registeredUsers; // Security cleanup
+
+  return res.status(200).json(new ApiResponse(200, contestObject, "Contest details fetched successfully"));
+});
 
 // --- REGISTER FOR CONTEST (Auth User) ---
-export const registerForContest = async (req, res) => {
-  try {
-    const { slug } = req.params;
-    const userId = req.userId;
+export const registerForContest = asyncHandler(async (req, res) => {
+  const { slug } = req.params;
+  const userId = req.userId;
 
-    const contest = await Contest.findOne({ slug: slug });
-    if (!contest) {
-      return res.status(404).json({ message: "Contest not found." });
-    }
+  const contest = await Contest.findOne({ slug }).select("_id startTime endTime visibility inviteCode");
+  if (!contest) throw new ApiError(404, "Contest not found.");
 
-    if (new Date(contest.startTime) <= new Date()) {
-      return res
-        .status(400)
-        .json({
-          message:
-            "Registration is closed. This contest is already live or has ended.",
-        });
-    }
-
-    if (contest.registeredUsers.includes(userId)) {
-      return res
-        .status(400)
-        .json({ message: "You are already registered for this contest." });
-    }
-
-    const visibility = contest.visibility ? contest.visibility.toUpperCase() : "PUBLIC";
-
-    if (visibility === "PRIVATE") {
-
-      const { inviteCode } = req.body;
-
-      if (!inviteCode || inviteCode !== contest.inviteCode) {
-        return res
-          .status(403)
-          .json({ message: "Invalid or missing invite code" });
-      }
-    }
-
-    contest.registeredUsers.push(userId);
-    await contest.save();
-
-    return res
-      .status(200)
-      .json({ message: "Successfully registered for the contest!" });
-  } catch (error) {
-    console.error("Error registering for contest:", error);
-    return res
-      .status(500)
-      .json({ message: `Error registering: ${error.message}` });
+  if (new Date(contest.endTime) <= new Date()) {
+    throw new ApiError(400, "Registration is closed. This contest has already ended.");
   }
-};
+
+  if (contest.visibility === "PRIVATE" || contest.visibility === "Private") {
+    if (!req.body.inviteCode || req.body.inviteCode !== contest.inviteCode) {
+      throw new ApiError(403, "Invalid or missing invite code");
+    }
+  }
+
+  try {
+    await ContestRegistration.create({ user: userId, contest: contest._id });
+    
+    return res.status(200).json(new ApiResponse(200, null, "Successfully registered for the arena!"));
+  } catch (err) {
+    if (err.code === 11000) {
+      throw new ApiError(400, "You are already registered for this contest.");
+    }
+    throw err;
+  }
+});
 
 // --- DELETE CONTEST (Admin/Master Only) ---
-export const deleteContest = async (req, res) => {
+export const deleteContest = asyncHandler(async (req, res) => {
   const { slug } = req.params;
+  
+  // We keep the Try-Catch here strictly for managing the Transaction Session
   const session = await mongoose.startSession();
   session.startTransaction();
+  
   try {
-    const contest = await Contest.findOneAndDelete({ slug: slug }).session(
-      session
-    );
+    const contest = await Contest.findOneAndDelete({ slug }).session(session);
     if (!contest) {
       await session.commitTransaction();
       session.endSession();
-      return res.status(404).json({ message: "Contest not found." });
+      throw new ApiError(404, "Contest not found.");
     }
 
-    // Optional: Delete associated contest submissions
-    await ContestSubmission.deleteMany({ contest: contest._id }).session(
-      session
-    );
+    await ContestSubmission.deleteMany({ contest: contest._id }).session(session);
+    await ContestRegistration.deleteMany({ contest: contest._id }).session(session);
 
     await session.commitTransaction();
     session.endSession();
-    return res.status(200).json({ message: "Contest deleted successfully." });
+    
+    return res.status(200).json(new ApiResponse(200, null, "Contest deleted successfully."));
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error("Error deleting contest:", error);
-    return res
-      .status(500)
-      .json({ message: `Error deleting contest: ${error.message}` });
+    throw new ApiError(error.statusCode || 500, error.message || "Failed to delete contest");
   }
-};
+});
 
 // --- UPDATE CONTEST (Admin/Master Only) ---
-export const updateContest = async (req, res) => {
+export const updateContest = asyncHandler(async (req, res) => {
   const { slug } = req.params;
+  const { title, description, startTime, endTime, problemIds } = req.body;
+
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const { title, description, startTime, endTime, problemIds } = req.body;
-    const updatedBy = req.userId;
+    const contest = await Contest.findOne({ slug }).session(session);
+    if (!contest) throw new ApiError(404, "Contest not found.");
 
-    // --- Find the existing contest ---
-    const contest = await Contest.findOne({ slug: slug }).session(session);
-    if (!contest) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ message: "Contest not found." });
-    }
-
-    // --- Basic Validation ---
     if (!title || !description || !startTime || !endTime) {
-      await session.abortTransaction();
-      session.endSession();
-      return res
-        .status(400)
-        .json({
-          message: "Title, description, start time, and end time are required.",
-        });
+      throw new ApiError(400, "Title, description, start time, and end time are required.");
     }
 
-    // --- Handle Title/Slug Change ---
     let newSlug = contest.slug;
     if (title && title !== contest.title) {
-      newSlug = title
-        .toLowerCase()
-        .replace(/\s+/g, "-")
-        .replace(/[^\w-]+/g, "");
-      // Check if new slug is taken by *another* contest
-      const existing = await Contest.findOne({
-        slug: newSlug,
-        _id: { $ne: contest._id },
-      }).session(session);
+      newSlug = title.toLowerCase().replace(/\s+/g, "-").replace(/[^\w-]+/g, "");
+      const existing = await Contest.findOne({ slug: newSlug, _id: { $ne: contest._id } }).session(session);
       if (existing) {
-        await session.abortTransaction();
-        session.endSession();
-        return res
-          .status(400)
-          .json({
-            message: `Another contest already exists with the title/slug '${title}'.`,
-          });
+        throw new ApiError(400, `Another contest already exists with the title/slug '${title}'.`);
       }
       contest.title = title;
       contest.slug = newSlug;
     }
 
-    // --- Validate Problems ---
     if (!problemIds || !Array.isArray(problemIds) || problemIds.length === 0) {
-      await session.abortTransaction();
-      session.endSession();
-      return res
-        .status(400)
-        .json({ message: "At least one problem ID is required." });
+      throw new ApiError(400, "At least one problem ID is required.");
     }
 
-    const foundProblems = await Problem.find({ _id: { $in: problemIds } })
-      .session(session)
-      .select("_id");
+    const foundProblems = await Problem.find({ _id: { $in: problemIds } }).session(session).select("_id");
     if (foundProblems.length !== problemIds.length) {
-      const foundIds = foundProblems.map((p) => p._id.toString());
-      const missingIds = problemIds.filter((id) => !foundIds.includes(id));
-      await session.abortTransaction();
-      session.endSession();
-      return res
-        .status(400)
-        .json({ message: `Invalid problem IDs: ${missingIds.join(", ")}` });
+      throw new ApiError(400, "Invalid problem IDs provided.");
     }
 
-    // Format problems for the schema
-    const problems = problemIds.map((id) => ({ problem: id }));
-
-    // --- Update Contest Fields ---
     contest.description = description;
     contest.startTime = startTime;
     contest.endTime = endTime;
-    contest.problems = problems;
-    // createdBy remains the same, but you could add an 'updatedBy' field if you want
+    contest.problems = problemIds.map((id) => ({ problem: id }));
 
     await contest.save();
-
-    // --- Commit and Send ---
     await session.commitTransaction();
     session.endSession();
 
-    return res.status(200).json(contest);
+    return res.status(200).json(new ApiResponse(200, contest, "Contest updated successfully."));
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    console.error("Error updating contest:", error);
-    return res
-      .status(500)
-      .json({ message: `Error updating contest: ${error.message}` });
+    throw new ApiError(error.statusCode || 500, error.message || "Failed to update contest");
   }
-};
+});
 
 // --- MANUAL RANKING CALCULATION (Admin) ---
-export const calculateRanking = async (req, res) => {
+export const calculateRanking = asyncHandler(async (req, res) => {
   const { slug } = req.params;
-  try {
-    const contest = await Contest.findOne({ slug });
-    if (!contest)
-      return res.status(404).json({ message: "Contest not found." });
+  
+  const contest = await Contest.findOne({ slug });
+  if (!contest) throw new ApiError(404, "Contest not found.");
 
-    // 1. Calculate using Service
-    const rankings = await rankingService.calculateContestRanking(
-      contest._id,
-      contest.startTime
-    );
+  const rankings = await rankingService.calculateContestRanking(contest._id, contest.startTime);
 
-    // 2. Save permanently to DB
-    const newRanking = await ContestRanking.findOneAndUpdate(
-      { contest: contest._id },
-      {
-        contest: contest._id,
-        rankings: rankings,
-        calculatedAt: new Date(),
-      },
-      { upsert: true, new: true }
-    );
+  const newRanking = await ContestRanking.findOneAndUpdate(
+    { contest: contest._id },
+    { contest: contest._id, rankings: rankings, calculatedAt: new Date() },
+    { upsert: true, new: true }
+  );
 
-    return res.status(200).json(newRanking);
-  } catch (error) {
-    return res.status(500).json({ message: error.message });
-  }
-};
+  return res.status(200).json(new ApiResponse(200, newRanking, "Rankings calculated successfully."));
+});
 
-// --- GET RANKING (Public - radis Optimized Hybrid Flow) ---
-export const getRanking = async (req, res) => {
-  try {
+// --- GET RANKING (Public - Decoupled Flow) ---
+export const getRanking = asyncHandler(async (req, res) => {
     const { slug } = req.params;
-    const cacheKey = `leaderboard:${slug}`;
-
-    // 1. REDIS CHECK (Fastest)
-    const cachedData = await redis.get(cacheKey);
+    
+    // 1. Check the Finalized Cache first (For past contests)
+    const finalizedCacheKey = `leaderboard:${slug}:final`;
+    const cachedData = await redisClient.get(finalizedCacheKey);
     if (cachedData) {
-      console.log(" Serving Leaderboard from Redis");
-      return res.status(200).json(JSON.parse(cachedData));
+        return res.status(200).json(new ApiResponse(200, JSON.parse(cachedData), "Final Leaderboard served from Cache"));
     }
 
-    console.log(" Calculating/Fetching Leaderboard from DB...");
+    const contest = await Contest.findOne({ slug }).select("_id isRankingsFinalized").lean();
+    if (!contest) throw new ApiError(404, "Contest not found.");
 
-    const contest = await Contest.findOne({ slug });
-    if (!contest) return res.status(404).json({ message: "Contest not found." });
-
-    let responseData;
-    let cacheTTL; 
-
-    //  DECIDE SOURCE: ARCHIVE vs LIVE
+    // 2. If Contest is OVER and FINALIZED
     if (contest.isRankingsFinalized) {
-      // --- A. ARCHIVED FLOW (Past Contest) ---
-      // Fetch from ContestRanking collection (Cheap)
-      const savedRanking = await ContestRanking.findOne({ contest: contest._id })
-        .populate("rankings.user", "name username photoUrl")
-        .populate("rankings.problemResults.problem", "title slug difficulty");
+        const savedRanking = await ContestRanking.findOne({ contest: contest._id })
+            .populate("rankings.user", "name username photoUrl")
+            .populate("rankings.problemResults.problem", "title slug difficulty")
+            .lean();
 
-      responseData = savedRanking;
-      cacheTTL = 3600; // 1 Hour (It won't change)
+        if (savedRanking) {
+            await redisClient.set(finalizedCacheKey, JSON.stringify(savedRanking), { EX: 3600 });
+            return res.status(200).json(new ApiResponse(200, savedRanking, "Final Leaderboard fetched"));
+        }
     } 
-    else {
-      // --- B. LIVE FLOW (Active Contest) ---
-      // Calculate from Submissions (Expensive)
-      const liveRankings = await rankingService.calculateContestRanking(
-        contest._id,
-        contest.startTime
-      );
 
-      // Populate manually for Live Objects
-      await User.populate(liveRankings, {
-        path: "user",
-        select: "name username photoUrl",
-      });
+    const contestIdString = contest._id.toString();
 
-      await Problem.populate(liveRankings, {
-        path: "problemResults.problem",
-        select: "title slug difficulty",
-      });
-
-      responseData = {
-        contest: contest._id,
-        rankings: liveRankings,
-      };
-      cacheTTL = 10; // 10 Seconds (Real-time updates)
-    }
-
-    // 3. SAVE TO REDIS
-    if (responseData) {
-        await redis.set(cacheKey, JSON.stringify(responseData), "EX", cacheTTL);
-    }
-
-    return res.status(200).json(responseData);
-
-  } catch (error) {
-    console.error("Error fetching ranking:", error);
-    return res.status(500).json({ message: error.message });
-  }
-};
-
+    //  3. IF CONTEST IS LIVE: Fetch the Live Redis Leaderboard
+    const liveRankings = await rankingService.getLiveLeaderboard(contestIdString);
+    
+    return res.status(200).json(new ApiResponse(200, { 
+        contest: contestIdString, 
+        rankings: liveRankings 
+    }, "Live Leaderboard fetched"));
+});

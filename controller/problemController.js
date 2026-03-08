@@ -401,23 +401,34 @@ export const deleteTestCaseFromProblem = asyncHandler(async (req, res) => {
     return res.status(200).json(new ApiResponse(200, null, "Test case deleted successfully."));
 });
 
-// ---  GET SOLUTION (Parallel I/O) ---
+// ---  GET SOLUTION (Contest Secured & Parallel I/O) ---
 export const getProblemSolution = asyncHandler(async (req, res) => {
     const { slug } = req.params;
     const userId = req.userId; 
+    const isAdmin = req.userRole === "admin" || req.userRole === "master";
 
-    const problem = await Problem.findOne({ slug, isDeleted: false }).select("_id solution").lean();
+    const problem = await Problem.findOne({ slug, isDeleted: false })
+        .select("_id solution isPublished")
+        .lean();
+        
     if (!problem) throw new ApiError(404, "Problem not found");
+
+    // CONTEST SECURITY GUARD: 
+    if (!problem.isPublished && !isAdmin) {
+        throw new ApiError(
+            403, 
+            "Strict Contest Mode: Solutions are hidden until the arena closes and the problem is published."
+        );
+    }
 
     const cacheKey = `solution_unlock:${userId}:${problem._id}`;
     
-    // Parallelize the Redis Cache lookup and the MongoDB Submission lookup
     const [isUnlocked, acceptedSubmission] = await Promise.all([
         redisClient.get(cacheKey),
         Submission.findOne({ problem: problem._id, user: userId, status: "Accepted" }).lean() 
     ]);
 
-    if (isUnlocked === "1" || acceptedSubmission || req.userRole === "admin" || req.userRole === "master") {
+    if (isUnlocked === "1" || acceptedSubmission || isAdmin) {
         if (!isUnlocked && acceptedSubmission) {
             redisClient.set(cacheKey, "1", { ex: 86400 * 30 }); 
         }
@@ -425,4 +436,20 @@ export const getProblemSolution = asyncHandler(async (req, res) => {
     }
 
     throw new ApiError(403, "You must successfully solve this problem to view the solution.");
+});
+
+
+// get unpublished problem during contest creation 
+export const getUnpublishedProblems = asyncHandler(async (req, res) => {
+    // Only fetch problems that are NOT published and NOT deleted
+    const availableProblems = await Problem.find({ 
+        isPublished: false, 
+        isDeleted: { $ne: true } 
+    })
+    .select("_id title slug difficulty score")
+    .lean();
+
+    return res.status(200).json(
+        new ApiResponse(200, availableProblems, "Available contest problems fetched.")
+    );
 });

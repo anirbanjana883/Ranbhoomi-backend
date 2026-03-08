@@ -2,6 +2,8 @@ import dotenv from "dotenv";
 import connectDb from "./config/connectDB.js";
 import { initDispatchWorker } from "./worker/dispatchWorker.js"; 
 import { initPollingWorker } from "./worker/pollingWorker.js";   
+import { initContestPollingWorker } from "./worker/contestPollingWorker.js";
+import { initContestDispatchWorker } from "./worker/contestDispatchWorker.js";
 // import { initPaymentWorker } from "./worker/paymentWorker.js";
 
 dotenv.config();
@@ -16,6 +18,9 @@ const startWorkerNode = async () => {
         //  Start the Decoupled BullMQ queue listeners
         initDispatchWorker();
         initPollingWorker();
+
+        initContestDispatchWorker();
+        initContestPollingWorker();
 
         //  Other System Workers
         // initPaymentWorker();

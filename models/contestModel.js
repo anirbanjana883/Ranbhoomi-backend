@@ -6,7 +6,6 @@ const contestProblemSchema = new mongoose.Schema({
         ref: 'Problem',
         required: true
     },
-
 }, { _id: false });
 
 const contestSchema = new mongoose.Schema(
@@ -24,7 +23,7 @@ const contestSchema = new mongoose.Schema(
             trim: true,
         },
         description: {
-            type: String, // Can be Markdown/HTML
+            type: String,
             required: true,
         },
         startTime: {
@@ -48,13 +47,8 @@ const contestSchema = new mongoose.Schema(
             trim: true
         },
         problems: [contestProblemSchema], 
-        registeredUsers: [
-            {
-                type: mongoose.Schema.Types.ObjectId,
-                ref: 'User',
-            }
-        ],
         
+
         createdBy: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User',
@@ -65,13 +59,16 @@ const contestSchema = new mongoose.Schema(
             default: false,
             index: true,
         },
-
+        isRankingsFinalized: {
+            type: Boolean,
+            default: false, 
+            index: true
+        }
     },
     {
         timestamps: true 
     }
 );
-
 
 contestSchema.pre('save', function (next) {
     if (this.endTime <= this.startTime) {

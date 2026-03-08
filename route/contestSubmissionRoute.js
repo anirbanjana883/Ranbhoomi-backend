@@ -7,17 +7,21 @@ import {
 import isAuth from "../middleware/isAuth.js";
 import { contestRateLimiter } from "../middleware/rateLimiter.js"; 
 
-const contestSubmissionRouter = express.Router();
-contestSubmissionRouter.use(isAuth); 
+const router = express.Router();
 
-contestSubmissionRouter.post(
-    "/", 
-    contestRateLimiter, 
-    createContestSubmission
-);
+// Apply Auth middleware globally to this entire router
+router.use(isAuth); 
 
-contestSubmissionRouter.get("/status/:submissionId", getContestSubmissionStatus); 
+// POST /api/contest-submissions
+// Action: Submit code for evaluation
+router.post("/", contestRateLimiter, createContestSubmission);
 
-contestSubmissionRouter.get("/problem/:slug", getSubmissionsForProblem); 
+// GET /api/contest-submissions/:submissionId
+// Action: Get the status/result of a specific submission (REST Fix)
+router.get("/:submissionId", getContestSubmissionStatus); 
 
-export default contestSubmissionRouter;
+// GET /api/contest-submissions/problem/:slug
+// Action: Get all contest submissions by the logged-in user for a specific problem
+router.get("/problem/:slug", getSubmissionsForProblem); 
+
+export default router;

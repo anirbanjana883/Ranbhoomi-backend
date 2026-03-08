@@ -6,7 +6,6 @@ dotenv.config();
 
 const redisUrl = process.env.UPSTASH_REDIS_URL;
 
-// MUST have maxRetriesPerRequest: null for BullMQ to work properly
 const connection = new IORedis(redisUrl || "redis://localhost:6379", {
   maxRetriesPerRequest: null,
   tls: redisUrl && redisUrl.startsWith("rediss://") ? {} : undefined, 
@@ -14,15 +13,9 @@ const connection = new IORedis(redisUrl || "redis://localhost:6379", {
   keepAlive: 10000,
 });
 
-connection.on("error", (error) => {
-    console.error("ioredis Connection Error:", error.message);
-});
+connection.on("error", (error) => console.error("ioredis Error:", error.message));
+connection.on("connect", () => console.log("ioredis connected successfully!"));
 
-connection.on("connect", () => {
-    console.log("ioredis (BullMQ TCP) connected successfully!");
-});
-
-//  Redis Memory Protection
 const defaultQueueOptions = {
     connection,
     defaultJobOptions: {
@@ -31,28 +24,21 @@ const defaultQueueOptions = {
     }
 };
 
-// ASYNCHRONOUS SUBMISSION ENGINE QUEUES
-
-//  Dispatcher: Merges code and sends to Judge0
+// --- NORMAL PRACTICE QUEUES ---
+// Dispatcher: Merges code and sends to Judge0
 export const dispatchQueue = new Queue("dispatch-queue", defaultQueueOptions);
-
-//  Poller: Asynchronously checks Judge0 status without blocking worker threads
+// Poller: Asynchronously checks Judge0 status
 export const pollingQueue = new Queue("polling-queue", defaultQueueOptions);
 
-//  Leaderboard: Updates DB rankings (decoupled to prevent DB bottlenecks)
-export const leaderboardQueue = new Queue("leaderboard-queue", defaultQueueOptions);
+// --- CONTEST QUEUES (Dedicated to prevent traffic jams) ---
+// High-priority dispatcher for live contests
+export const contestDispatchQueue = new Queue("contest-dispatch-queue", defaultQueueOptions);
+// High-priority poller for live contests
+export const contestPollingQueue = new Queue("contest-polling-queue", defaultQueueOptions);
 
-
-//  OTHER SYSTEM QUEUES
-
-export const aiRetryQueue = new Queue("ai-retry-queue", { 
-    connection,
-    defaultJobOptions: { removeOnComplete: true } 
-});
-
-export const paymentMailQueue = new Queue("payment-mail-queue", { 
-    connection,
-    defaultJobOptions: { removeOnComplete: true } 
-});
+// --- OTHER SYSTEM QUEUES ---
+// export const leaderboardQueue = new Queue("leaderboard-queue", defaultQueueOptions);
+export const aiRetryQueue = new Queue("ai-retry-queue", { connection, defaultJobOptions: { removeOnComplete: true } });
+export const paymentMailQueue = new Queue("payment-mail-queue", { connection, defaultJobOptions: { removeOnComplete: true } });
 
 export default connection;

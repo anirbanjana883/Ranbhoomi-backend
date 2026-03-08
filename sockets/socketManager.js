@@ -14,7 +14,7 @@ export const initSockets = (httpServer) => {
         },
     });
 
-    // Auth Middleware
+    // --- Auth Middleware ---
     io.use((socket, next) => {
         const token = socket.handshake.auth.token || socket.handshake.query.token;
         if (token) {
@@ -32,10 +32,23 @@ export const initSockets = (httpServer) => {
     io.on("connection", (socket) => {
         if (socket.userId) socket.join(socket.userId); 
 
-        //  Register System 1: The Run Code Fast-Path
+        // Register System 1: The Run Code Fast-Path
         handleRunCode(socket);
 
-        // Interview Room Logic
+        //  --- CONTEST LEADERBOARD LOGIC ---
+        socket.on("join-contest", (contestId) => {
+            if (!contestId) return;
+            socket.join(`contest_${contestId}`);
+            console.log(`Socket ${socket.id} joined contest_${contestId}`);
+        });
+
+        socket.on("leave-contest", (contestId) => {
+            if (!contestId) return;
+            socket.leave(`contest_${contestId}`);
+            console.log(`Socket ${socket.id} left contest_${contestId}`);
+        });
+
+        // --- INTERVIEW ROOM LOGIC ---
         socket.on("join-room", (roomID) => {
             if (!roomID || Array.from(socket.rooms).includes(roomID)) return; 
             socket.join(roomID);
@@ -65,23 +78,38 @@ export const initSockets = (httpServer) => {
         socket.on("tldraw-cursor", (payload) => socket.to(payload.roomID).emit("tldraw-cursor-update", { socketId: socket.id, cursor: payload.cursor }));
     });
 
-    const subscriber = connection.duplicate();
+
+    //  --- REDIS PUBSUB FOR ASYNC EVENTS ---
+    const subscriber = connection.duplicate(); 
     
-    subscriber.subscribe("submission-events", (err, count) => {
-        if (err) console.error("Failed to subscribe to submission-events", err);
+    subscriber.subscribe("submission-events", "leaderboard-events", (err, count) => {
+        if (err) console.error("Failed to subscribe to Redis channels", err);
         else console.log(`Socket server subscribed to ${count} Redis channels.`);
     });
 
     subscriber.on("message", (channel, message) => {
-        if (channel === "submission-events") {
-            try {
-                const data = JSON.parse(message);
+        try {
+            const data = JSON.parse(message);
+
+            if (channel === "submission-events") {
+                // Direct notification back to the user who submitted the code
                 if (data.userId) {
                     io.to(data.userId).emit("submission-events", data);
                 }
-            } catch (err) {
-                console.error("Error parsing Redis message:", err);
             }
+
+            if (channel === "leaderboard-events") {
+                // Broadcast leaderboard update to EVERYONE viewing this specific contest
+                if (data.contestId) {
+                    io.to(`contest_${data.contestId}`).emit("leaderboard-updated", {
+                        userId: data.userId,
+                        newScore: data.newScore
+                    });
+                }
+            }
+
+        } catch (err) {
+            console.error("Error parsing Redis message:", err);
         }
     });
 

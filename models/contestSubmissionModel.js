@@ -36,11 +36,10 @@ const contestSubmissionSchema = new mongoose.Schema(
     code: { type: String, required: true },
     language: { type: String, required: true, trim: true, lowercase: true },
     
-    // 👇 UPDATE THIS SECTION
     status: {
       type: String,
       enum: [
-        "Queued", // 👈 ADD THIS! (Matches your Controller)
+        "Queued", 
         "Pending",
         "Judging",
         "Accepted",
@@ -49,8 +48,9 @@ const contestSubmissionSchema = new mongoose.Schema(
         "Runtime Error",
         "Compilation Error",
         "Memory Limit Exceeded",
+        "Internal Error" // Added for Dead Lettering / Circuit Breaker drops
       ],
-      default: "Queued", // Default should match the initial state
+      default: "Queued",
       required: true,
     },
     
@@ -64,6 +64,10 @@ const contestSubmissionSchema = new mongoose.Schema(
         index: true 
     },
 
+    // 👈 ADDED: Required by Polling Worker to save execution metrics
+    executionTime: { type: Number, default: 0 },
+    memoryUsed: { type: Number, default: 0 },
+
     submissionTime: { type: Date, default: Date.now }, 
   },
   {
@@ -71,8 +75,8 @@ const contestSubmissionSchema = new mongoose.Schema(
   }
 );
 
-const ContestSubmission = mongoose.model(
-  "ContestSubmission",
-  contestSubmissionSchema
-);
+// Compound Index: Optimizes fetching a user's submissions for a specific problem in a contest
+contestSubmissionSchema.index({ user: 1, problem: 1, contest: 1, createdAt: -1 });
+
+const ContestSubmission = mongoose.model("ContestSubmission", contestSubmissionSchema);
 export default ContestSubmission;

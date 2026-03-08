@@ -11,6 +11,7 @@ import {
   getProblemSolution,
   getAllProblemsAdmin,
   getProblemForEdit,
+  getUnpublishedProblems,
 } from "../controller/problemController.js";
 import isAuth from "../middleware/isAuth.js";
 import isAdmin from "../middleware/isAdmin.js";
@@ -24,7 +25,8 @@ const problemRouter = express.Router();
 
 // Note: Kept /admin prefix for dashboard-specific heavy reads to separate them from public APIs
 problemRouter.get("/admin/all", isAuth, isAdmin, getAllProblemsAdmin);
-problemRouter.get("/admin/:slug", isAuth, isAdmin, getProblemForEdit); // Replaces /admin/edit/:slug
+problemRouter.get("/admin/:slug", isAuth, isAdmin, getProblemForEdit); 
+problemRouter.get("/unpublished", isAuth, isAdmin, getUnpublishedProblems);
 
 // ==========================================
 // 2. TEST CASE MANAGEMENT (Sub-Resources)

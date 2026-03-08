@@ -4,7 +4,7 @@ import connectDb from "./config/connectDB.js";
 import app from "./app.js";
 import { initSockets } from "./sockets/socketManager.js";
 import { setupRedisSubscriber } from "./services/pubsubService.js";
-import { initCronJobs } from "./jobs/cornJobs.js";
+// import { initCronJobs } from "./jobs/cornJobs.js";
 
 dotenv.config();
 
@@ -25,7 +25,7 @@ const startServer = async () => {
         setupRedisSubscriber(io);
 
         //  Initialize Cron Jobs
-        initCronJobs();
+        // initCronJobs();
 
         //  Start Listening
         httpServer.listen(port, () => {
