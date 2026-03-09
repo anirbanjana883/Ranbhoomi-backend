@@ -1,33 +1,58 @@
+import crypto from "crypto";
 import ContestSubmission from "../models/contestSubmissionModel.js";
 import ContestRegistration from "../models/contestRegistrationModel.js"; 
 import Contest from "../models/contestModel.js";
 import Problem from "../models/problemModel.js";
-import { contestDispatchQueue } from "../config/queue.js"; 
+import connection, { contestDispatchQueue } from "../config/queue.js"; 
 import redisClient from "../config/redis.js"; 
+import { updateLeaderboard } from "../services/rankingService.js"; // Adjust path if needed
 
 // --- IMPORT UTILITIES ---
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
+// Strict language enforcement
+const ALLOWED_LANGUAGES = ["cpp", "java", "python"];
+
 // --- CREATE CONTEST SUBMISSION (Producer) ---
 export const createContestSubmission = asyncHandler(async (req, res) => {
     const { slug, problemSlug, language, code } = req.body;
     const userId = req.userId;
-
-    if (!language || !code || !slug || !problemSlug) {
-        throw new ApiError(400, "Contest, problem, language, and code are required.");
+    
+    // Validate Contest Slug Format
+    if (!slug || !/^[a-z0-9-]+$/.test(slug)) {
+        throw new ApiError(400, "Invalid contest slug format.");
     }
-    if (code.length > 20000) throw new ApiError(413, "Code exceeds 20KB limit.");
 
-    // 🛡️ 1. Circuit Breaker & Backpressure Guard
+    // Validate Problem Slug Format
+    if (!problemSlug || !/^[a-z0-9-]+$/.test(problemSlug)) {
+        throw new ApiError(400, "Invalid problem slug format.");
+    }
+
+    // Normalize and Validate Language
+    const normalizedLanguage = language?.toLowerCase().trim();
+    if (!normalizedLanguage || !ALLOWED_LANGUAGES.includes(normalizedLanguage)) {
+        throw new ApiError(400, `Unsupported language. Allowed: ${ALLOWED_LANGUAGES.join(", ")}`);
+    }
+
+    // Normalize and Validate Code
+    const trimmedCode = code?.trim();
+    if (!trimmedCode || trimmedCode.length < 5) {
+        throw new ApiError(400, "Code is too short or empty.");
+    }
+    if (trimmedCode.length > 20000) {
+        throw new ApiError(413, "Code exceeds 20KB limit.");
+    }
+
+    //  Circuit Breaker & Backpressure Guard
     const circuitOpen = await redisClient.get("circuit_breaker:judge0");
     if (circuitOpen) throw new ApiError(503, "Execution engine is temporarily pausing. Try again in 30s.");
 
     const waitingCount = await contestDispatchQueue.getWaitingCount();
     if (waitingCount > 5000) throw new ApiError(503, "System is at maximum capacity. Please try again shortly.");
 
-    // 🛡️ 2. REDIS MUTEX LOCK: Double-Click Protection
+    //  REDIS MUTEX LOCK: Double-Click Protection
     const lockKey = `lock:submit:${userId}:${problemSlug}`;
     const acquired = await redisClient.set(lockKey, "locked", { NX: true, EX: 5 });
     if (!acquired) throw new ApiError(429, "Please wait before submitting again.");
@@ -52,25 +77,23 @@ export const createContestSubmission = asyncHandler(async (req, res) => {
         const isProblemInContest = contest.problems.some(p => p.problem.toString() === problem._id.toString());
         if (!isProblemInContest) throw new ApiError(400, "This problem is not part of this contest.");
 
-        // 🧠 3. CODE HASHING & CACHING (The LeetCode Trick)
-        const hashPayload = `${code}-${language}`;
+        //  CODE HASHING & CACHING (The LeetCode Trick)
+        const hashPayload = `${trimmedCode}-${normalizedLanguage}`;
         const codeHash = crypto.createHash("sha256").update(hashPayload).digest("hex");
         
-        // 🚨 IMPORTANT: Make sure this key matches the key saved in contestPollingWorker exactly!
         const cacheKey = `cache:sub:${problem._id}:${codeHash}`;
-        
         const cachedResultStr = await redisClient.get(cacheKey);
 
         if (cachedResultStr) {
-            // ⚡ CACHE HIT! Bypass BullMQ and Judge0 entirely
+            //  CACHE HIT - Bypass BullMQ and Judge0 entirely
             const cachedResult = JSON.parse(cachedResultStr);
             
             const newSubmission = await ContestSubmission.create({
                 user: userId,
                 problem: problem._id,
                 contest: contest._id, 
-                code,
-                language,
+                code: trimmedCode,
+                language: normalizedLanguage,
                 status: cachedResult.status,
                 score: cachedResult.score,
                 executionTime: cachedResult.executionTime,
@@ -79,13 +102,13 @@ export const createContestSubmission = asyncHandler(async (req, res) => {
                 submissionTime: now
             });
 
-            // 🏆 Update Leaderboard
+            //  Update Leaderboard
             await updateLeaderboard(
                 contest._id, userId, problemSlug, 
                 cachedResult.status, cachedResult.score, now
             );
 
-            // 📡 🔥 FIX: PUBLISH TO WEBSOCKETS SO UI UPDATES INSTANTLY!
+            //  FIX: PUBLISH TO WEBSOCKETS SO UI UPDATES INSTANTLY!
             await connection.publish("submission-events", JSON.stringify({
                 userId, 
                 submissionId: newSubmission._id, 
@@ -99,13 +122,13 @@ export const createContestSubmission = asyncHandler(async (req, res) => {
             return res.status(200).json(new ApiResponse(200, newSubmission, "Submission evaluated instantly (Cached)"));
         }
 
-        // 🚦 4. CREATE QUEUED SUBMISSION
+        //  CREATE QUEUED SUBMISSION
         const newSubmission = await ContestSubmission.create({
             user: userId,
             problem: problem._id,
             contest: contest._id, 
-            code,
-            language,
+            code: trimmedCode,
+            language: normalizedLanguage,
             status: "Queued", 
             judge0Tokens: [],
             results: [],
@@ -113,22 +136,22 @@ export const createContestSubmission = asyncHandler(async (req, res) => {
             submissionTime: now
         });
 
-        // 🔥 5. PUSH TO ISOLATED CONTEST QUEUE
+        //  PUSH TO ISOLATED CONTEST QUEUE
         await contestDispatchQueue.add("process-contest-submission", {
-            submissionId: newSubmission._id,
-            code,
-            language,
+            submissionId: newSubmission._id.toString(),
+            code: trimmedCode,
+            language: normalizedLanguage,
             slug: problemSlug, 
             userId,
             isContest: true,       
             contestId: contest._id 
         }, { 
-            jobId: newSubmission._id.toString(), // BullMQ deduplication
+            jobId: newSubmission._id.toString(), 
             attempts: 3, 
             backoff: { type: 'exponential', delay: 1000 } 
         });
 
-        return res.status(201).json(new ApiResponse(201, newSubmission, "Submission Queued for Evaluation"));
+        return res.status(201).json(new ApiResponse(201, { submissionId: newSubmission._id }, "Submission Queued for Evaluation"));
 
     } catch (error) {
         await redisClient.del(lockKey); 
@@ -141,7 +164,6 @@ export const getContestSubmissionStatus = asyncHandler(async (req, res) => {
     const { submissionId } = req.params; 
     const userId = req.userId;
 
-    // Use .lean() for fast read performance
     const submission = await ContestSubmission.findOne({ _id: submissionId, user: userId }).lean();
     if (!submission) throw new ApiError(404, "Contest submission not found.");
 
@@ -153,14 +175,13 @@ export const getSubmissionsForProblem = asyncHandler(async (req, res) => {
     const { slug } = req.params; 
     const userId = req.userId;   
     
-    // Lean query just to get the ID
-    const problem = await Problem.findOne({ slug }).select("_id").lean();
+    const problem = await Problem.findOne({ slug, isDeleted: { $ne: true } }).select("_id").lean();
     if (!problem) throw new ApiError(404, "Problem not found.");
 
-    // History fetch using Lean and Projection for speed
     const submissions = await ContestSubmission.find({ problem: problem._id, user: userId })
         .select("status language score createdAt executionTime memoryUsed") 
         .sort({ createdAt: -1 })
+        .limit(50)
         .lean(); 
 
     return res.status(200).json(new ApiResponse(200, submissions, "Submissions history fetched successfully"));

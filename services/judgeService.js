@@ -10,13 +10,15 @@ const HEADERS = {
     'Content-Type': 'application/json'
 };
 
-export const formatSubmissions = (code, languageId, testCases) => {
+export const formatSubmissions = (code, languageId, testCases, timeLimit = 2.0, memoryLimit = 256000) => {
     const encodedCode = Buffer.from(code).toString('base64');
     return testCases.map(tc => ({
         source_code: encodedCode,
         language_id: languageId,
         stdin: Buffer.from(tc.input || "").toString('base64'),
         expected_output: Buffer.from(tc.expectedOutput || "").toString('base64'),
+        cpu_time_limit: timeLimit,       
+        memory_limit: memoryLimit        
     }));
 };
 

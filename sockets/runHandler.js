@@ -8,17 +8,27 @@ import {
   pollJudge0Batch,
 } from "../services/judgeService.js";
 
-//  Safely truncate output
+const ALLOWED_LANGUAGES = ["cpp", "java", "python"];
+
+//  Safely truncate output
 const safeTruncate = (str) =>
   str?.length > 2000 ? str.substring(0, 2000) + "\n...[TRUNCATED]" : str;
 
 export const handleRunCode = (socket) => {
   socket.on("run_code", async (payload) => {
     const { slug, language, code } = payload;
-    const userId = socket.user?.id;
+    const userId = socket.user?.id || socket.userId; // Fallback depending on your auth middleware setup
 
     try {
-      //  Strict Rate Limiting (Max 2 runs per minute)
+      //  Fail-Fast Language Guard
+      const normalizedLanguage = language?.toLowerCase().trim();
+      if (!normalizedLanguage || !ALLOWED_LANGUAGES.includes(normalizedLanguage)) {
+          return socket.emit("run_error", {
+              message: `Unsupported language. Allowed: ${ALLOWED_LANGUAGES.join(", ")}`,
+          });
+      }
+
+      //  Strict Rate Limiting (Max 2 runs per minute)
       const rateKey = `rate:run:${userId}`;
       const runCount = await redisClient.incr(rateKey);
       if (runCount === 1) await redisClient.expire(rateKey, 60);
@@ -30,7 +40,7 @@ export const handleRunCode = (socket) => {
 
       socket.emit("run_status", { status: "Fetching Test Cases..." });
 
-      //  CACHING: Fetch ONLY Sample Test Cases from Redis
+      //  CACHING: Fetch ONLY Sample Test Cases from Redis
       const cacheKey = `samples:${slug}`;
       let evalData = await redisClient.get(cacheKey);
 
@@ -40,11 +50,11 @@ export const handleRunCode = (socket) => {
           slug,
           isDeleted: { $ne: true },
         })
-          .select("_id driverCode")
+          .select("_id driverCode timeLimit memoryLimit") // 🚀 FIX: Fetch Limits
           .lean();
         if (!problem) throw new Error("Problem not found.");
 
-        //  Fetch onnly isSample: true
+        //  Fetch only isSample: true
         const sampleTestCases = await TestCase.find({
           problem: problem._id,
           isSample: true,
@@ -55,6 +65,8 @@ export const handleRunCode = (socket) => {
         evalData = {
           driverCode: problem.driverCode,
           testCases: sampleTestCases,
+          timeLimit: problem.timeLimit,
+          memoryLimit: problem.memoryLimit,
         };
         await redisClient.set(cacheKey, JSON.stringify(evalData), { ex: 3600 });
       } else {
@@ -62,26 +74,28 @@ export const handleRunCode = (socket) => {
           typeof evalData === "string" ? JSON.parse(evalData) : evalData;
       }
 
-      const languageId = getLanguageId(language);
+      const languageId = getLanguageId(normalizedLanguage);
 
-      //  MERGE DRIVER CODE
+      //  MERGE DRIVER CODE
       let finalCode = code;
       const driver = evalData.driverCode?.find(
-        (dc) => dc.language.toLowerCase() === language.toLowerCase(),
+        (dc) => dc.language.toLowerCase() === normalizedLanguage,
       );
       if (driver) finalCode = `${code}\n\n${driver.code}`;
 
       socket.emit("run_status", { status: "Compiling and Executing..." });
 
-      //  SEND TO JUDGE0
+      //  SEND TO JUDGE0
       const submissions = formatSubmissions(
         finalCode,
         languageId,
         evalData.testCases,
+        evalData.timeLimit,
+        evalData.memoryLimit
       );
       const tokens = await submitToJudge0(submissions);
 
-      //  ASYNC POLLING (Directly in memory, no queues needed for ephemeral runs)
+      //  ASYNC POLLING (Directly in memory, no queues needed for ephemeral runs)
       let attempts = 0;
       let results = [];
       let isProcessing = true;
@@ -107,7 +121,7 @@ export const handleRunCode = (socket) => {
         return Buffer.from(str, "base64").toString("utf8");
       };
 
-      //  FORMAT RESPONSE
+      //  FORMAT RESPONSE
       const formattedResults = results.map((r, index) => {
         const tc = evalData.testCases[index];
 
@@ -137,7 +151,7 @@ export const handleRunCode = (socket) => {
         };
       });
 
-      //  EMIT FINAL RESULT BACK TO CLIENT
+      //  EMIT FINAL RESULT BACK TO CLIENT
       socket.emit("run_result", {
         status: formattedResults.every((r) => r.status === "Passed")
           ? "Accepted"

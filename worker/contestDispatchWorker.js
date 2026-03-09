@@ -23,13 +23,19 @@ export const initContestDispatchWorker = () => {
             let evalData;
             
             if (!evalDataStr) {
-                const prob = await Problem.findOne({ slug }).select("_id driverCode score").lean();
+                const prob = await Problem.findOne({ slug }).select("_id driverCode score timeLimit memoryLimit").lean();
                 if (!prob) throw new Error("Problem not found");
                 
                 const testCases = await TestCase.find({ problem: prob._id }).lean();
                 if (!testCases || testCases.length === 0) throw new Error("No test cases found");
                 
-                evalData = { driverCode: prob.driverCode, score: prob.score, testCases };
+                evalData = { 
+                    driverCode: prob.driverCode, 
+                    score: prob.score, 
+                    testCases,
+                    timeLimit: prob.timeLimit,
+                    memoryLimit: prob.memoryLimit
+                };
                 await redisClient.set(`eval_data:${slug}`, JSON.stringify(evalData), { ex: 3600 });
             } else {
                 evalData = typeof evalDataStr === "string" ? JSON.parse(evalDataStr) : evalDataStr;
@@ -41,7 +47,13 @@ export const initContestDispatchWorker = () => {
             if (driver) finalCode = `${code}\n\n${driver.code}`;
 
             // Submit to Judge0
-            const formatted = formatSubmissions(finalCode, languageId, evalData.testCases);
+            const formatted = formatSubmissions(
+                finalCode, 
+                languageId, 
+                evalData.testCases,
+                evalData.timeLimit,
+                evalData.memoryLimit
+            );
             const tokens = await submitToJudge0(formatted);
 
             // Update DB
@@ -50,7 +62,6 @@ export const initContestDispatchWorker = () => {
                 judge0Tokens: tokens.map(t => ({ token: t }))
             });
 
-            // 🚀 Handoff to CONTEST Polling Queue
             await contestPollingQueue.add("poll-contest-judge", {
                 submissionId, tokens, slug, userId, contestId, code, language, attempt: 1
             }, { delay: 2000 });
@@ -77,7 +88,7 @@ export const initContestDispatchWorker = () => {
 
             throw error; 
         }
-    }, { connection, concurrency: 15 }); // 🔥 Higher concurrency for contests
+    }, { connection, concurrency: 15 }); 
 
     console.log("🚀 Contest Dispatch Worker Initialized");
 };

@@ -8,6 +8,19 @@ const starterCodeSchema = new mongoose.Schema(
   { _id: false },
 );
 
+//  Sub-schema for parameter mapping
+const parameterSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    type: { type: String, required: true }
+}, { _id: false });
+
+//  Sub-schema to store the auto-generation blueprint
+const signatureSchema = new mongoose.Schema({
+    functionName: { type: String, required: true },
+    returnType: { type: String, required: true },
+    parameters: [parameterSchema]
+}, { _id: false });
+
 const problemSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, unique: true, trim: true },
@@ -26,6 +39,11 @@ const problemSchema = new mongoose.Schema(
 
     tags: [{ type: String, trim: true, lowercase: true }],
     companyTags: [{ type: String, trim: true, lowercase: true }],
+
+    // Execution limits & Signature blueprint
+    signature: { type: signatureSchema, required: false },
+    timeLimit: { type: Number, default: 2.0 }, // In seconds
+    memoryLimit: { type: Number, default: 256000 }, // In KB (256MB)
 
     starterCode: [starterCodeSchema],
     driverCode: [
@@ -57,7 +75,7 @@ const problemSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-    optimisticConcurrency: true, //  Version Control (__v) for concurrent admin edits
+    optimisticConcurrency: true, 
   },
 );
 

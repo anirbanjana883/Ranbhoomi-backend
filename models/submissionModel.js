@@ -1,4 +1,3 @@
-// models/submissionModel.js
 import mongoose from "mongoose";
 
 const testResultSchema = new mongoose.Schema(

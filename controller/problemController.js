@@ -3,6 +3,7 @@ import Problem from "../models/problemModel.js";
 import TestCase from "../models/testCaseModel.js";
 import Submission from "../models/submissionModel.js";
 import User from "../models/userModel.js";
+import { generateProblemCodes } from "../utils/codeGenerator.js";
 
 import {
   ALLOWED_PROBLEM_TAGS,
@@ -24,8 +25,7 @@ const txnOptions = {
     writeConcern: { w: "majority" }
 };
 
-
-// --- 1. GET ALL PROBLEMS (Pagination, Text Index, Lean) --- done
+// ---  GET ALL PROBLEMS (Pagination, Text Index, Lean) --- 
 export const getAllProblems = asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
@@ -59,7 +59,7 @@ export const getAllProblems = asyncHandler(async (req, res) => {
     return res.status(200).json(new ApiResponse(200, problems));
 });
 
-// ---  GET ALL PROBLEMS (Admin Only) --- done
+// ---  GET ALL PROBLEMS (Admin Only) --- 
 export const getAllProblemsAdmin = asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50; 
@@ -85,7 +85,7 @@ export const getAllProblemsAdmin = asyncHandler(async (req, res) => {
     return res.status(200).json(new ApiResponse(200, problems));
 });
 
-// ---  GET problem by slug  --- done 
+// ---  GET problem by slug  ---  
 export const getProblemBySlug = asyncHandler(async (req, res) => {
     const { slug } = req.params;
     const cacheKey = `problem:${slug}`;
@@ -150,7 +150,7 @@ export const getProblemForEdit = asyncHandler(async (req, res) => {
     return res.status(200).json(new ApiResponse(200, problem));
 });
 
-// --- CREATE PROBLEM (Admin/Master Only) ---
+// --- CREATE PROBLEM (Strict DSL Generation Mode) (Admin/Master Only) ---
 export const createProblem = asyncHandler(async (req, res) => {
     const session = await mongoose.startSession();
     let createdProblem;
@@ -158,13 +158,20 @@ export const createProblem = asyncHandler(async (req, res) => {
     await session.withTransaction(async () => {
         const { 
             title, description, difficulty, tags, companyTags, 
-            starterCode, driverCode, testCasesData, solution, 
-            isPremium, isPublished, originContest 
+            signature, testCasesData, solution, 
+            isPremium, isPublished, originContest,
+            timeLimit, memoryLimit 
         } = req.body;
 
-        // Strict Basic Validation
-        if (!title || !description || !difficulty || !testCasesData || !Array.isArray(testCasesData) || testCasesData.length === 0 || !starterCode || !Array.isArray(starterCode) || starterCode.length === 0) {
-            throw new ApiError(400, "Missing required fields: title, description, difficulty, starterCode, and at least one test case.");
+        // siggnature validation
+        if (!signature || !signature.functionName || !signature.returnType || !Array.isArray(signature.parameters)) {
+            throw new ApiError(400, "Problem signature (functionName, returnType, parameters) is strictly required to auto-generate execution code.");
+        }
+
+        const { starterCode, driverCode } = generateProblemCodes(signature);
+
+        if (!title || !description || !difficulty || !testCasesData || !Array.isArray(testCasesData) || testCasesData.length === 0) {
+            throw new ApiError(400, "Missing required fields: title, description, difficulty, and at least one test case.");
         }
 
         // Validate & Normalize Problem Tags
@@ -191,11 +198,12 @@ export const createProblem = asyncHandler(async (req, res) => {
             throw new ApiError(400, `A problem with this ${field} already exists.`);
         }
 
-        // Create Problem Doc
+        // Create Problem Doc (Dynamically attaches the compiled code)
         const newProblem = new Problem({
             title, slug: generatedSlug, description, difficulty,
             tags: validatedTags, companyTags: validatedCompanyTags,
-            starterCode, driverCode: driverCode || [], solution: solution || "",
+            signature, timeLimit: timeLimit || 2.0, memoryLimit: memoryLimit || 256000,
+            starterCode, driverCode, solution: solution || "",
             isPremium: isPremium || false, isPublished: isPublished,
             originContest: originContest || null, testCases: []
         });
@@ -217,7 +225,7 @@ export const createProblem = asyncHandler(async (req, res) => {
     return res.status(201).json(new ApiResponse(201, createdProblem, "Problem Created Successfully"));
 });
 
-// ---  UPDATE PROBLEM DETAILS (Admin/Master Only) ---
+// --- UPDATE PROBLEM DETAILS (Strict DSL Generation Mode) (Admin/Master Only)---
 export const updateProblem = asyncHandler(async (req, res) => {
     const { slug } = req.params;
     const session = await mongoose.startSession();
@@ -228,9 +236,13 @@ export const updateProblem = asyncHandler(async (req, res) => {
         const problem = await Problem.findOne({ slug, isDeleted: { $ne: true } }).session(session);
         if (!problem) throw new ApiError(404, "Problem not found");
 
-        const { title, description, difficulty, tags, companyTags, starterCode, driverCode, solution, isPremium, isPublished } = req.body;
+        const { 
+            title, description, difficulty, tags, companyTags, 
+            signature, solution, 
+            isPremium, isPublished, timeLimit, memoryLimit 
+        } = req.body;
 
-        // Handle Title/Slug Change & Duplication Check
+        //  Title/Slug Change & Duplication Check
         if (title && title !== problem.title) {
             const newSlug = title.toLowerCase().replace(/\s+/g, "-").replace(/[^\w-]+/g, "");
             const existing = await Problem.findOne({ slug: newSlug, _id: { $ne: problem._id } }).session(session);
@@ -259,17 +271,22 @@ export const updateProblem = asyncHandler(async (req, res) => {
             problem.companyTags = validatedCompanyTags;
         }
 
+        //  Auto-Regenerate Code if Signature is Passed
+        if (signature && signature.functionName) {
+            const { starterCode, driverCode } = generateProblemCodes(signature);
+            problem.signature = signature;
+            problem.starterCode = starterCode;
+            problem.driverCode = driverCode;
+        }
+
         // Update Other Fields
         if (description !== undefined) problem.description = description;
         if (difficulty !== undefined) problem.difficulty = difficulty;
-        if (starterCode !== undefined) problem.starterCode = starterCode;
         if (solution !== undefined) problem.solution = solution;
         if (isPremium !== undefined) problem.isPremium = Boolean(isPremium);
         if (isPublished !== undefined) problem.isPublished = Boolean(isPublished);
-        if (driverCode !== undefined) {
-            if (!Array.isArray(driverCode)) throw new ApiError(400, "Driver code must be an array.");
-            problem.driverCode = driverCode;
-        }
+        if (timeLimit !== undefined) problem.timeLimit = timeLimit;
+        if (memoryLimit !== undefined) problem.memoryLimit = memoryLimit;
 
         // Save Updates
         problem.updatedAt = new Date(); 
@@ -291,7 +308,6 @@ export const updateProblem = asyncHandler(async (req, res) => {
     await redisClient.del(`samples:${updatedProblem.slug}`);
 
     return res.status(200).json(new ApiResponse(200, updatedProblem, "Problem updated successfully"));
-
 });
 
 // --- DELETE PROBLEM (Admin/Master Only) ---
@@ -376,8 +392,10 @@ export const deleteTestCaseFromProblem = asyncHandler(async (req, res) => {
     const { testCaseId } = req.params;
     const session = await mongoose.startSession();
 
+    let updatedProblem;
+
     await session.withTransaction(async () => {
-        const updatedProblem = await Problem.findOneAndUpdate(
+        updatedProblem = await Problem.findOneAndUpdate(
             { testCases: testCaseId }, 
             { 
                 $pull: { testCases: testCaseId },
@@ -391,8 +409,10 @@ export const deleteTestCaseFromProblem = asyncHandler(async (req, res) => {
         await TestCase.findByIdAndDelete(testCaseId).session(session);
         
     }, txnOptions); 
+    
     session.endSession();
 
+    // Now this works perfectly!
     if (updatedProblem && updatedProblem.slug) {
         await redisClient.del(`eval_data:${updatedProblem.slug}`);
         await redisClient.del(`samples:${updatedProblem.slug}`);
@@ -437,7 +457,6 @@ export const getProblemSolution = asyncHandler(async (req, res) => {
 
     throw new ApiError(403, "You must successfully solve this problem to view the solution.");
 });
-
 
 // get unpublished problem during contest creation 
 export const getUnpublishedProblems = asyncHandler(async (req, res) => {

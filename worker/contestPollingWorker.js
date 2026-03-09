@@ -1,6 +1,6 @@
 import { Worker } from "bullmq";
 import crypto from "crypto";
-import connection, { contestPollingQueue, leaderboardQueue } from "../config/queue.js";
+import connection, { contestPollingQueue } from "../config/queue.js";
 import ContestSubmission from "../models/contestSubmissionModel.js";
 import Problem from "../models/problemModel.js";
 import TestCase from "../models/testCaseModel.js";
@@ -45,9 +45,16 @@ export const initContestPollingWorker = () => {
             let evalData;
             
             if (!evalDataStr) {
-                const prob = await Problem.findOne({ slug }).select("_id driverCode score").lean();
+                const prob = await Problem.findOne({ slug }).select("_id driverCode score timeLimit memoryLimit").lean();
                 const testCases = await TestCase.find({ problem: prob._id }).lean();
-                evalData = { driverCode: prob.driverCode, score: prob.score, testCases };
+                
+                evalData = { 
+                    driverCode: prob.driverCode, 
+                    score: prob.score, 
+                    testCases,
+                    timeLimit: prob.timeLimit,
+                    memoryLimit: prob.memoryLimit
+                };
                 await redisClient.set(`eval_data:${slug}`, JSON.stringify(evalData), { ex: 3600 });
             } else {
                 evalData = typeof evalDataStr === "string" ? JSON.parse(evalDataStr) : evalDataStr;
@@ -83,7 +90,7 @@ export const initContestPollingWorker = () => {
 
             const score = isAllAccepted ? (evalData.score || 100) : 0;
 
-            // 1. Atomic DB Update
+            //  Atomic DB Update
             await ContestSubmission.findByIdAndUpdate(submissionId, {
                 status: finalStatus, 
                 results: detailedResults,
@@ -92,7 +99,7 @@ export const initContestPollingWorker = () => {
                 memoryUsed: maxMemory
             });
 
-            // 🧠 2. CACHE THE RESULT (Phase 2 - Code Hashing)
+            //  CACHE THE RESULT (Phase 2 - Code Hashing)
             const hashPayload = `${code}-${language}`;
             const codeHash = crypto.createHash("sha256").update(hashPayload).digest("hex");
             const cacheKey = `cache:sub:${evalData.testCases[0]?.problem}:${codeHash}`;
@@ -101,17 +108,7 @@ export const initContestPollingWorker = () => {
                 status: finalStatus, score, executionTime: maxTime, memoryUsed: maxMemory, results: detailedResults
             }), { EX: 86400 });
 
-            // 🏆 3. UPDATE CONTEST LEADERBOARD (Triggers leaderboard worker)
-            // await leaderboardQueue.add("update-contest-rank", { 
-            //     contestId, 
-            //     userId, 
-            //     problemSlug: slug, 
-            //     status: finalStatus, 
-            //     score,
-            //     submissionTime: submission.createdAt // Used for time penalties
-            // });
-
-            // 🏆 3. UPDATE CONTEST LEADERBOARD (Direct Function Call)
+            //  UPDATE CONTEST LEADERBOARD (Direct Function Call)
             try {
                 await updateLeaderboard(
                     contestId, 
@@ -125,7 +122,7 @@ export const initContestPollingWorker = () => {
                 console.error("⚠️ Failed to update live leaderboard:", leaderboardError);
             }
 
-            // 📡 4. NOTIFY USER SOCKET
+            //  NOTIFY USER SOCKET
             await connection.publish("submission-events", JSON.stringify({
                 userId, submissionId, status: finalStatus
             }));
@@ -138,7 +135,7 @@ export const initContestPollingWorker = () => {
             }));
             throw error;
         }
-    }, { connection, concurrency: 30 }); // 🔥 Massive polling capacity
+    }, { connection, concurrency: 30 }); 
 
     console.log("🕵️ Contest Polling Worker Initialized");
 };

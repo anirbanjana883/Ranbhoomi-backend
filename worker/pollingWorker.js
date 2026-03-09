@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import connection, { pollingQueue, leaderboardQueue } from "../config/queue.js";
+import connection, { pollingQueue } from "../config/queue.js";
 import Submission from "../models/submissionModel.js";
 import Problem from "../models/problemModel.js";
 import TestCase from "../models/testCaseModel.js";
@@ -21,7 +21,7 @@ export const initPollingWorker = () => {
         const submission = await Submission.findById(submissionId).select("status").lean();
         if (!submission || submission.status !== "Judging") return; 
 
-        //  Timeout Guard (Dead Letter)
+        // Timeout Guard (Dead Letter)
         if (attempt > 15) {
             await Submission.findByIdAndUpdate(submissionId, { status: "Internal Error" });
             console.error(`[DLQ] Submission ${submissionId} timed out after 15 polls.`);
@@ -38,7 +38,7 @@ export const initPollingWorker = () => {
             const isPending = results.some(r => r.status.id <= 2);
 
             if (isPending) {
-                //  Non-Blocking Re-queue: Free up the worker thread.
+                // Non-Blocking Re-queue: Free up the worker thread.
                 await pollingQueue.add("poll-judge", {
                     ...job.data, attempt: attempt + 1
                 }, { delay: 2000 });
@@ -53,11 +53,17 @@ export const initPollingWorker = () => {
             
             if (!evalDataStr) {
                 console.warn(`Cache miss for eval_data:${slug} during polling. Healing cache...`);
-                const prob = await Problem.findOne({ slug }).select("_id driverCode score").lean();
+                const prob = await Problem.findOne({ slug }).select("_id driverCode score timeLimit memoryLimit").lean();
                 if (!prob) throw new Error("Problem not found during evaluation");
                 const testCases = await TestCase.find({ problem: prob._id }).lean();
                 
-                evalData = { driverCode: prob.driverCode, score: prob.score, testCases };
+                evalData = { 
+                    driverCode: prob.driverCode, 
+                    score: prob.score, 
+                    testCases,
+                    timeLimit: prob.timeLimit,
+                    memoryLimit: prob.memoryLimit
+                };
                 await redisClient.set(`eval_data:${slug}`, JSON.stringify(evalData), { ex: 3600 });
             } else {
                 evalData = typeof evalDataStr === "string" ? JSON.parse(evalDataStr) : evalDataStr;
@@ -101,11 +107,6 @@ export const initPollingWorker = () => {
                 executionTime: maxTime, 
                 memoryUsed: maxMemory
             });
-
-            // Decouple Leaderboard Updates
-            if (isAllAccepted) {
-                await leaderboardQueue.add("update-rank", { userId, slug, score });
-            }
 
             // Notify Socket Gateway
             await connection.publish("submission-events", JSON.stringify({
