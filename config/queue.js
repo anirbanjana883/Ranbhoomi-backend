@@ -37,8 +37,10 @@ export const contestDispatchQueue = new Queue("contest-dispatch-queue", defaultQ
 export const contestPollingQueue = new Queue("contest-polling-queue", defaultQueueOptions);
 
 // --- OTHER SYSTEM QUEUES ---
-// export const leaderboardQueue = new Queue("leaderboard-queue", defaultQueueOptions);
+// export const interviewQueue = new Queue("interview-queue", { connection: redisConnection });
+
 export const aiRetryQueue = new Queue("ai-retry-queue", { connection, defaultJobOptions: { removeOnComplete: true } });
+
 export const paymentMailQueue = new Queue("payment-mail-queue", { connection, defaultJobOptions: { removeOnComplete: true } });
 
 export default connection;

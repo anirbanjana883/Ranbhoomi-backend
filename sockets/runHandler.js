@@ -10,37 +10,46 @@ import {
 
 const ALLOWED_LANGUAGES = ["cpp", "java", "python"];
 
-//  Safely truncate output
+// Safely truncate output
 const safeTruncate = (str) =>
   str?.length > 2000 ? str.substring(0, 2000) + "\n...[TRUNCATED]" : str;
 
 export const handleRunCode = (socket) => {
   socket.on("run_code", async (payload) => {
-    const { slug, language, code } = payload;
-    const userId = socket.user?.id || socket.userId; // Fallback depending on your auth middleware setup
+    const { slug, language, code, roomID } = payload;
+    const userId = socket.user?.id || socket.userId; 
+
+    // If a roomID exists, blast the event to the interviewer as well
+    const broadcastEvent = (eventName, data) => {
+      socket.emit(eventName, data); // Send to candidate (sender)
+      if (roomID) {
+        socket.to(roomID).emit(eventName, data); // Send to interviewer
+      }
+    };
 
     try {
-      //  Fail-Fast Language Guard
+      // Fail-Fast Language Guard
       const normalizedLanguage = language?.toLowerCase().trim();
       if (!normalizedLanguage || !ALLOWED_LANGUAGES.includes(normalizedLanguage)) {
-          return socket.emit("run_error", {
+          return broadcastEvent("run_error", {
               message: `Unsupported language. Allowed: ${ALLOWED_LANGUAGES.join(", ")}`,
           });
       }
 
-      //  Strict Rate Limiting (Max 2 runs per minute)
+      // Strict Rate Limiting (Max 2 runs per minute)
       const rateKey = `rate:run:${userId}`;
       const runCount = await redisClient.incr(rateKey);
       if (runCount === 1) await redisClient.expire(rateKey, 60);
       if (runCount > 2) {
-        return socket.emit("run_error", {
-          message: "Slow down! You are running code too fast.",
+        return broadcastEvent("run_error", {
+          message: "🤚Slow down! You are running code too fast.",
         });
       }
 
-      socket.emit("run_status", { status: "Fetching Test Cases..." });
+      // Both candidate and interviewer will see this loading state
+      broadcastEvent("run_status", { status: "Fetching Test Cases..." });
 
-      //  CACHING: Fetch ONLY Sample Test Cases from Redis
+      // CACHING: Fetch ONLY Sample Test Cases from Redis
       const cacheKey = `samples:${slug}`;
       let evalData = await redisClient.get(cacheKey);
 
@@ -50,11 +59,11 @@ export const handleRunCode = (socket) => {
           slug,
           isDeleted: { $ne: true },
         })
-          .select("_id driverCode timeLimit memoryLimit") // 🚀 FIX: Fetch Limits
+          .select("_id driverCode timeLimit memoryLimit") 
           .lean();
         if (!problem) throw new Error("Problem not found.");
 
-        //  Fetch only isSample: true
+        // Fetch only isSample: true
         const sampleTestCases = await TestCase.find({
           problem: problem._id,
           isSample: true,
@@ -76,16 +85,17 @@ export const handleRunCode = (socket) => {
 
       const languageId = getLanguageId(normalizedLanguage);
 
-      //  MERGE DRIVER CODE
+      // MERGE DRIVER CODE
       let finalCode = code;
       const driver = evalData.driverCode?.find(
         (dc) => dc.language.toLowerCase() === normalizedLanguage,
       );
       if (driver) finalCode = `${code}\n\n${driver.code}`;
 
-      socket.emit("run_status", { status: "Compiling and Executing..." });
+      // Update both users: compilation started
+      broadcastEvent("run_status", { status: "Compiling and Executing..." });
 
-      //  SEND TO JUDGE0
+      // SEND TO JUDGE0
       const submissions = formatSubmissions(
         finalCode,
         languageId,
@@ -95,7 +105,7 @@ export const handleRunCode = (socket) => {
       );
       const tokens = await submitToJudge0(submissions);
 
-      //  ASYNC POLLING (Directly in memory, no queues needed for ephemeral runs)
+      // ASYNC POLLING
       let attempts = 0;
       let results = [];
       let isProcessing = true;
@@ -121,11 +131,10 @@ export const handleRunCode = (socket) => {
         return Buffer.from(str, "base64").toString("utf8");
       };
 
-      //  FORMAT RESPONSE
+      // FORMAT RESPONSE
       const formattedResults = results.map((r, index) => {
         const tc = evalData.testCases[index];
 
-        // Decode the base64 output from Judge0 before truncating
         const rawStdout = decodeBase64(r.stdout);
         const rawStderr = decodeBase64(r.stderr);
         const rawCompileErr = decodeBase64(r.compile_output);
@@ -151,16 +160,17 @@ export const handleRunCode = (socket) => {
         };
       });
 
-      //  EMIT FINAL RESULT BACK TO CLIENT
-      socket.emit("run_result", {
+      //  EMIT FINAL RESULT BACK TO CLIENTS
+      broadcastEvent("run_result", {
         status: formattedResults.every((r) => r.status === "Passed")
           ? "Accepted"
           : "Failed",
         results: formattedResults,
       });
+
     } catch (error) {
       console.error("Run Code Error:", error);
-      socket.emit("run_error", {
+      broadcastEvent("run_error", {
         message: error.message || "Failed to execute code.",
       });
     }
