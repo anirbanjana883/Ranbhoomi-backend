@@ -1,2 +1,6 @@
 .env
 node_modules
+
+
+# One-time database seeding scripts and data
+backend/seeding/data.json

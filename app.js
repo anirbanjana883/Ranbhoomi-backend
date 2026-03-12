@@ -19,6 +19,8 @@ import commentRouter from "./route/commentRoute.js";
 import aiRouter from "./route/aiRoute.js";
 import paymentRouter from "./route/paymentRoute.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import roadmapAdminRouter from "./route/roadmapAdminRoute.js";
+import roadmapRouter from "./route/roadmapRoute.js";
 
 const app = express();
 
@@ -59,6 +61,8 @@ app.use('/api/comments', commentRouter);
 app.use("/api/ai", aiRouter);
 app.use("/api/payment", paymentRouter);
 app.use("/api/community", communityRouter);
+app.use("/api/admin/roadmap", roadmapAdminRouter);
+app.use("/api/roadmap", roadmapRouter);
 
 app.get("/", (req, res) => res.send("RANBHOOMI API Operational ⚔️"));
 
