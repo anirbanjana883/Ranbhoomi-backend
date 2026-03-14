@@ -1,10 +1,5 @@
 # Backend System Documentation: Roadmap & User Progress Tracking Module
 
-**Platform:** Ranbhoomi (Competitive Programming & Remote Interview Platform)  
-**Module:** Curriculum Matrix & Progress Tracking System
-
----
-
 ## 1. System Overview
 
 The Roadmap & User Progress Tracking System is a core gamification and structured learning module within the Ranbhoomi platform. It provides users with a highly organized, hierarchical curriculum (Roadmap -> Topics -> Subtopics -> Questions).

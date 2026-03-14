@@ -1,13 +1,8 @@
 # Backend System Documentation: Admin Roadmap Management System
 
-**Platform:** Ranbhoomi (Competitive Programming & Remote Interview Platform)  
-**Module:** Curriculum Builder & Content Management System (CMS)
-
----
-
 ## 1. System Overview
 
-The Admin Roadmap Management System is the internal content management engine that powers the Curriculum Matrix of the Ranbhoomi platform. It allows platform administrators and content creators to dynamically build, modify, and restructure complex learning paths (e.g., "Blind 75", "Striver A2Z") without requiring manual database intervention.
+The Admin Roadmap Management System is the internal content management engine that powers the Curriculum Matrix of the Ranbhoomi platform. It allows platform administrators and content creators to dynamically build, modify, and restructure complex learning paths (e.g., "RANBHOOMI 75", "RANBHOOMI DSA SHEET") without requiring manual database intervention.
 
 In a scalable competitive programming platform, curriculum structures are highly volatile during the curation phase. This module is designed to handle deep tree-like data structures (Roadmaps → Topics → SubTopics → Questions) while avoiding the severe performance penalties and memory spikes typically associated with updating massive nested JSON documents in document-oriented databases like MongoDB.
 
