@@ -24,6 +24,9 @@ import roadmapRouter from "./route/roadmapRoute.js";
 
 const app = express();
 
+app.get('/api/health', (req, res) => res.send('Backend is awake'));
+
+
 app.use(express.json());
 app.use(cookieParser());
 app.use(cors({ origin: "http://localhost:5173", credentials: true }));
@@ -48,9 +51,9 @@ app.use((req, res, next) => {
 });
 
 // Keep-Alive Health Check Endpoint
-app.get('/api/health', (req, res) => {
-    res.status(200).json({ status: 'active', message: 'Ranbhoomi engine is awake' });
-});
+// app.get('/api/health', (req, res) => {
+//     res.status(200).json({ status: 'active', message: 'Ranbhoomi engine is awake' });
+// });
 
 // --- ROUTES ---
 app.use("/api/auth", authRouter);
