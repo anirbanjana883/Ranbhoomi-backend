@@ -135,7 +135,16 @@ export const initContestPollingWorker = () => {
             }));
             throw error;
         }
-    }, { connection, concurrency: 30 }); 
+    }, { 
+        // BULLMQ WORKER SETTINGS
+        connection, 
+        concurrency: 30,
+
+        //  UPSTASH FREE TIER SURVIVAL SETTINGS 
+        stalledInterval: 60000, // Check for crashed jobs every 60s instead of 30s
+        lockDuration: 60000,    // Keep job lock for 60s
+        metrics: null           // Disable heavy metric tracking polling
+    }); 
 
     console.log("🕵️ Contest Polling Worker Initialized");
 };
