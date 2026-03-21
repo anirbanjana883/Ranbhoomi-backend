@@ -47,6 +47,11 @@ app.use((req, res, next) => {
     next();
 });
 
+// Keep-Alive Health Check Endpoint
+app.get('/api/health', (req, res) => {
+    res.status(200).json({ status: 'active', message: 'Ranbhoomi engine is awake' });
+});
+
 // --- ROUTES ---
 app.use("/api/auth", authRouter);
 app.use("/api/user", userRouter);
