@@ -29,7 +29,8 @@ app.get('/api/health', (req, res) => res.send('Backend is awake'));
 
 app.use(express.json());
 app.use(cookieParser());
-app.use(cors({ origin: "http://localhost:5173", credentials: true }));
+const allowedOrigin = process.env.FRONTEND_URL || "http://localhost:5173";
+app.use(cors({ origin: allowedOrigin, credentials: true }));
 
 app.use(
     helmet({
@@ -37,13 +38,18 @@ app.use(
         contentSecurityPolicy: {
             directives: {
                 defaultSrc: ["'self'"],
-                connectSrc: ["'self'", "http://localhost:5173", "ws://localhost:5000", process.env.CLIENT_URL || "http://localhost:5173"],
+                connectSrc: [
+                    "'self'", 
+                    allowedOrigin,             // Dynamically allows Vercel or Localhost
+                    "ws://localhost:5000",     // Allows WebSockets when coding locally
+                    "wss://*.onrender.com"     // Allows Secure WebSockets (wss://) in Render production!
+                ],
                 imgSrc: ["'self'", "data:", "https://lh3.googleusercontent.com", "https://cdn-icons-png.flaticon.com"],
                 scriptSrc: ["'self'", "'unsafe-inline'"],
             },
         },
     })
-);
+)
 
 app.use((req, res, next) => {
     console.log(`[API] ${req.method} ${req.originalUrl}`);
