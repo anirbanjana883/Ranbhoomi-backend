@@ -1,4 +1,3 @@
-// app.js
 import express from "express";
 import cookieParser from "cookie-parser";
 import cors from "cors";
@@ -21,17 +20,52 @@ import paymentRouter from "./route/paymentRoute.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import roadmapAdminRouter from "./route/roadmapAdminRoute.js";
 import roadmapRouter from "./route/roadmapRoute.js";
+import { razorpayWebhook } from "./controller/webhookController.js";
 
 const app = express();
 
 app.get('/api/health', (req, res) => res.send('Backend is awake'));
 
+// Webhook MUST be before express.json()
+app.post("/api/payment/webhook", express.raw({ type: "application/json" }), razorpayWebhook);
 
 app.use(express.json());
 app.use(cookieParser());
-const allowedOrigin = process.env.FRONTEND_URL || "http://localhost:5173";
-app.use(cors({ origin: allowedOrigin, credentials: true }));
 
+// 1. Define Origins & Strip Trailing Slashes (Bulletproof safety)
+const rawOrigins = [
+    process.env.FRONTEND_URL, 
+    "http://localhost:5173",
+    "http://127.0.0.1:5173"
+];
+const allowedOrigins = rawOrigins.map(url => url ? url.replace(/\/$/, "") : null).filter(Boolean);
+
+// 2. The Invincible Custom CORS Middleware
+app.use((req, res, next) => {
+    // Strip trailing slash from incoming origin just to be safe
+    const origin = req.headers.origin ? req.headers.origin.replace(/\/$/, "") : null;
+    
+    // If the request comes from an origin in our list, bounce that exact origin back!
+    if (allowedOrigins.includes(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+    }
+    
+    // CRITICAL FOR AUTH: Allow cookies to be sent
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    
+    // Standard allowed methods and headers
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS, POST, PUT, DELETE, PATCH");
+    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+
+    // Handle preflight requests instantly
+    if (req.method === "OPTIONS") {
+        return res.status(200).end();
+    }
+    
+    next();
+});
+
+// 3. Helmet Security
 app.use(
     helmet({
         crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -40,26 +74,21 @@ app.use(
                 defaultSrc: ["'self'"],
                 connectSrc: [
                     "'self'", 
-                    allowedOrigin,             // Dynamically allows Vercel or Localhost
-                    "ws://localhost:5000",     // Allows WebSockets when coding locally
-                    "wss://*.onrender.com"     // Allows Secure WebSockets (wss://) in Render production!
+                    ...allowedOrigins,         
+                    "ws://localhost:5000",     
+                    "wss://*.onrender.com"     
                 ],
                 imgSrc: ["'self'", "data:", "https://lh3.googleusercontent.com", "https://cdn-icons-png.flaticon.com"],
                 scriptSrc: ["'self'", "'unsafe-inline'"],
             },
         },
     })
-)
+);
 
 app.use((req, res, next) => {
-    console.log(`[API] ${req.method} ${req.originalUrl}`);
+    console.log(`[API] ${req.method} ${req.originalUrl} | Origin: ${req.headers.origin}`);
     next();
 });
-
-// Keep-Alive Health Check Endpoint
-// app.get('/api/health', (req, res) => {
-//     res.status(200).json({ status: 'active', message: 'Ranbhoomi engine is awake' });
-// });
 
 // --- ROUTES ---
 app.use("/api/auth", authRouter);

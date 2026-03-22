@@ -41,6 +41,6 @@ export const contestPollingQueue = new Queue("contest-polling-queue", defaultQue
 
 export const aiRetryQueue = new Queue("ai-retry-queue", { connection, defaultJobOptions: { removeOnComplete: true } });
 
-export const paymentMailQueue = new Queue("payment-mail-queue", { connection, defaultJobOptions: { removeOnComplete: true } });
+// export const paymentMailQueue = new Queue("payment-mail-queue", { connection, defaultJobOptions: { removeOnComplete: true } });
 
 export default connection;
