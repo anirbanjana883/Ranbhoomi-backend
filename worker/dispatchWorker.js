@@ -11,7 +11,7 @@ export const initDispatchWorker = () => {
 
     const workerConnection = connection.duplicate();
 
-    const wroker = new Worker("dispatch-queue", async (job) => {
+    const worker = new Worker("dispatch-queue", async (job) => {
         const { submissionId, code, language, slug, userId } = job.data;
 
         // Idempotency Guard: Ensure we don't re-dispatch if retried
