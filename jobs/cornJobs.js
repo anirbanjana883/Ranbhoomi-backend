@@ -6,9 +6,11 @@ import { applyGravityToHotPosts } from "../services/communityService.js";
 
 export const initCronJobs = () => {
     
+    const scheduledTasks = [];
+
     //  CONTEST MAINTENANCE (Runs every 5 minutes)
 
-    cron.schedule("*/5 * * * *", async () => { 
+    const maintenanceTask = cron.schedule("*/5 * * * *", async () => { 
         const lockKey = "cron:maintenance:lock";
         const gotLock = await redisClient.set(lockKey, "1", { nx: true, ex: 60 });
         
@@ -30,9 +32,11 @@ export const initCronJobs = () => {
         }
     });
 
+    scheduledTasks.push(maintenanceTask);
+
     //  COMMUNITY HOT SCORE DECAY (Runs every 10 minutes)
 
-    cron.schedule("*/10 * * * *", async () => {
+    const gravityTask = cron.schedule("*/10 * * * *", async () => {
         const lockKey = "cron:hotscore:lock"; 
         const gotLock = await redisClient.set(lockKey, "1", { nx: true, ex: 60 });
 
@@ -48,5 +52,9 @@ export const initCronJobs = () => {
         }
     });
 
+    scheduledTasks.push(gravityTask);
+    
     console.log("Cron Scheduler Initialized");
+
+    return scheduledTasks;
 };

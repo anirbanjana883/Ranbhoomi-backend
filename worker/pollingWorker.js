@@ -14,7 +14,10 @@ const safeTruncate = (str) => {
 };
 
 export const initPollingWorker = () => {
-    new Worker("polling-queue", async (job) => {
+    
+    const workerConnection = connection.duplicate();
+
+    const worker = new Worker("polling-queue", async (job) => {
         const { submissionId, tokens, slug, userId, attempt } = job.data;
 
         // FIX: Strict Idempotency Guard
@@ -125,7 +128,7 @@ export const initPollingWorker = () => {
         }
     }, { 
         // BULLMQ WORKER SETTINGS
-        connection, 
+        connection : workerConnection, 
         concurrency: 20,
 
         //  UPSTASH FREE TIER SURVIVAL SETTINGS 
@@ -134,5 +137,6 @@ export const initPollingWorker = () => {
         metrics: null           // Disable heavy metric tracking polling
     }); 
 
-    console.log("Polling Worker Initialized");
+    console.log(" => Polling Worker Initialized");
+    return worker;
 };

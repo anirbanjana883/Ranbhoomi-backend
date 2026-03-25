@@ -8,7 +8,10 @@ import { getLanguageId } from "../config/languageIds.js";
 import { formatSubmissions, submitToJudge0 } from "../services/judgeService.js";
 
 export const initContestDispatchWorker = () => {
-    new Worker("contest-dispatch-queue", async (job) => {
+
+    const workerConnection = connection.duplicate();
+    
+    const worker = new Worker("contest-dispatch-queue", async (job) => {
         // We expect contestId to be passed from the controller!
         const { submissionId, code, language, slug, userId, contestId } = job.data;
 
@@ -90,7 +93,7 @@ export const initContestDispatchWorker = () => {
         }
     }, { 
         // BULLMQ WORKER SETTINGS
-        connection, 
+        connection: workerConnection,
         concurrency: 15,
 
         //  UPSTASH FREE TIER SURVIVAL SETTINGS 
@@ -99,5 +102,7 @@ export const initContestDispatchWorker = () => {
         metrics: null           // Disable heavy metric tracking polling
     }); 
 
-    console.log("🚀 Contest Dispatch Worker Initialized");
+    console.log(" => Contest Dispatch Worker Initialized");
+
+    return worker;
 };

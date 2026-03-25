@@ -15,7 +15,10 @@ const safeTruncate = (str) => {
 };
 
 export const initContestPollingWorker = () => {
-    new Worker("contest-polling-queue", async (job) => {
+
+    const workerConnection = connection.duplicate();
+
+    const worker = new Worker("contest-polling-queue", async (job) => {
         const { submissionId, tokens, slug, userId, contestId, code, language, attempt } = job.data;
 
         // Idempotency Guard
@@ -119,7 +122,7 @@ export const initContestPollingWorker = () => {
                     submission.createdAt
                 );
             } catch (leaderboardError) {
-                console.error("⚠️ Failed to update live leaderboard:", leaderboardError);
+                console.error("Failed to update live leaderboard:", leaderboardError);
             }
 
             //  NOTIFY USER SOCKET
@@ -137,7 +140,7 @@ export const initContestPollingWorker = () => {
         }
     }, { 
         // BULLMQ WORKER SETTINGS
-        connection, 
+        connection : workerConnection, 
         concurrency: 30,
 
         //  UPSTASH FREE TIER SURVIVAL SETTINGS 
@@ -146,5 +149,7 @@ export const initContestPollingWorker = () => {
         metrics: null           // Disable heavy metric tracking polling
     }); 
 
-    console.log("🕵️ Contest Polling Worker Initialized");
+    console.log(" => Contest Polling Worker Initialized");
+
+    return worker;
 };
