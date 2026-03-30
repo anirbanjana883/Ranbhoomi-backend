@@ -37,7 +37,7 @@ const scheduleRedisSave = (roomID) => {
 export const initSockets = (httpServer) => {
   const io = new Server(httpServer, {
     cors: {
-      origin: ["http://localhost:5173", process.env.CLIENT_URL],
+      origin: ["http://localhost:5173", process.env.FRONTEND_URL],
       methods: ["GET", "POST", "PUT", "PATCH"],
       credentials: true,
     },
