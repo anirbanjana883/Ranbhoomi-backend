@@ -47,7 +47,7 @@ Express API Gateway
     └── Prometheus Metrics
 ```
 
-In production, this decoupled design is bootstrapped as a **"Majestic Monolith"** (API + workers + cron in one process) to run cost-free on Render/Upstash's tiers — see [Deployment Architecture](./docs/deployment-architecture.md) for why and how.
+In production, this decoupled design is bootstrapped as a **"Majestic Monolith"** (API + workers + cron in one process) to run cost-free on Render/Upstash's tiers — see [View Deployement Doc →](./docs/System%20Architecture%20%26%20Deployment%20Strategy.md) for why and how.
 
 ---
 
@@ -69,8 +69,6 @@ Each module has a full design doc under `/docs` covering functional & non-functi
 | 10 | **Remote Interview Engine** | [View Doc →](./docs/Remote%20Interview%20Engine.md) | Real-time collaborative interview rooms: WebRTC signaling, synced code editor, whiteboard, sandboxed RCE. |
 | 11 | **Payment & Subscription Engine** | [View Doc →](./docs/Payment%20%26%20Subscription%20Engine.md) | Razorpay integration with dual-layer verification (client ack + webhook source-of-truth) and ACID-transactional provisioning. |
 | 12 | **Deployment Architecture & Free-Tier Strategy** | [View Doc →](./docs/System%20Architecture%20%26%20Deployment%20Strategy.md) | Why the decoupled microservice design ships as a "Majestic Monolith" on Render/Upstash, and how to split it back out later. |
-
-> 📁 Links assume the README lives at the repo root and the docs sit directly in `backend/docs/` — if your README is inside `backend/`, drop the `backend/` segment from each path (already done above); if it's one level higher, prefix each link with `backend/`.
 
 ---
 
