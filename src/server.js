@@ -4,6 +4,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { errorHandler } from "./shared/middlewares/errorHandler.middleware.js";
 
+// Import Modular Routes
 import authRoutes from "./modules/auth/auth.routes.js";
 import userRoutes from "./modules/users/user.routes.js";
 import problemRoutes from "./modules/problems/problem.routes.js";
@@ -14,6 +15,7 @@ import paymentRoutes from "./modules/payments/payment.routes.js";
 import roadmapRoutes from "./modules/roadmaps/roadmap.routes.js";
 import communityRoutes from "./modules/community/community.routes.js";
 import aiRoutes from "./modules/ai/ai.routes.js";
+import tagRoutes from "./modules/tags/tag.routes.js"; // <-- ADDED
 import { razorpayWebhook } from "./modules/payments/payment.controller.js";
 
 const app = express();
@@ -59,6 +61,7 @@ app.use("/api/payment", paymentRoutes);
 app.use("/api/roadmaps", roadmapRoutes);
 app.use("/api/community", communityRoutes);
 app.use("/api/ai", aiRoutes);
+app.use("/api/tags", tagRoutes); // <-- ADDED
 
 app.get("/", (req, res) => res.send("RANBHOOMI API Operational ⚔️"));
 app.use(errorHandler);
