@@ -4,13 +4,22 @@ import cors from "cors";
 import helmet from "helmet";
 import { errorHandler } from "./shared/middlewares/errorHandler.middleware.js";
 
+// Import Modular Routes
+import authRoutes from "./modules/auth/auth.routes.js";
+import userRoutes from "./modules/users/user.routes.js";
+import problemRoutes from "./modules/problems/problem.routes.js";
+import executionRoutes from "./modules/codeexecution/codeexecution.routes.js";
+import contestRoutes from "./modules/contests/contest.routes.js";
+import interviewRoutes from "./modules/interview/interview.routes.js";
+import paymentRoutes from "./modules/payments/payment.routes.js";
+import { razorpayWebhook } from "./modules/payments/payment.controller.js";
+
 const app = express();
 
 app.get('/api/health', (req, res) => res.status(200).send('Backend is awake'));
 
-// LOGIC CHANGE: Webhook router placeholder (must bypass JSON parser). Will map to Payment Module in Phase 9.
-// import { razorpayWebhook } from "./modules/payments/payment.controller.js";
-// app.post("/api/payment/webhook", express.raw({ type: "application/json" }), razorpayWebhook);
+// Webhook MUST be before express.json()
+app.post("/api/payment/webhook", express.raw({ type: "application/json" }), razorpayWebhook);
 
 app.use(express.json());
 app.use(cookieParser());
@@ -40,12 +49,14 @@ app.use(helmet({
     },
 }));
 
-// Route placeholders - These will be populated in subsequent phases
-// app.use("/api/auth", authRoutes);
-// app.use("/api/users", userRoutes);
-// app.use("/api/problems", problemRoutes);
-// app.use("/api/contests", contestRoutes);
-// ...
+// Route Definitions
+app.use("/api/auth", authRoutes);
+app.use("/api/user", userRoutes);
+app.use("/api/problems", problemRoutes);
+app.use("/api/code", executionRoutes); 
+app.use("/api/contests", contestRoutes);
+app.use("/api/interview", interviewRoutes);
+app.use("/api/payment", paymentRoutes);
 
 app.get("/", (req, res) => res.send("RANBHOOMI API Operational ⚔️"));
 app.use(errorHandler);
