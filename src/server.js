@@ -12,6 +12,7 @@ import executionRoutes from "./modules/codeexecution/codeexecution.routes.js";
 import contestRoutes from "./modules/contests/contest.routes.js";
 import interviewRoutes from "./modules/interview/interview.routes.js";
 import paymentRoutes from "./modules/payments/payment.routes.js";
+import roadmapRoutes from "./modules/roadmaps/roadmap.routes.js";
 import { razorpayWebhook } from "./modules/payments/payment.controller.js";
 
 const app = express();
@@ -57,6 +58,7 @@ app.use("/api/code", executionRoutes);
 app.use("/api/contests", contestRoutes);
 app.use("/api/interview", interviewRoutes);
 app.use("/api/payment", paymentRoutes);
+app.use("/api/roadmaps", roadmapRoutes);
 
 app.get("/", (req, res) => res.send("RANBHOOMI API Operational ⚔️"));
 app.use(errorHandler);
