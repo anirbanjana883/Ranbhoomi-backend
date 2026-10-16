@@ -4,7 +4,6 @@ import cors from "cors";
 import helmet from "helmet";
 import { errorHandler } from "./shared/middlewares/errorHandler.middleware.js";
 
-// Import Modular Routes
 import authRoutes from "./modules/auth/auth.routes.js";
 import userRoutes from "./modules/users/user.routes.js";
 import problemRoutes from "./modules/problems/problem.routes.js";
@@ -14,19 +13,19 @@ import interviewRoutes from "./modules/interview/interview.routes.js";
 import paymentRoutes from "./modules/payments/payment.routes.js";
 import roadmapRoutes from "./modules/roadmaps/roadmap.routes.js";
 import communityRoutes from "./modules/community/community.routes.js";
+import aiRoutes from "./modules/ai/ai.routes.js";
 import { razorpayWebhook } from "./modules/payments/payment.controller.js";
 
 const app = express();
 
 app.get('/api/health', (req, res) => res.status(200).send('Backend is awake'));
-
 app.post("/api/payment/webhook", express.raw({ type: "application/json" }), razorpayWebhook);
 
 app.use(express.json());
 app.use(cookieParser());
 
 const rawOrigins = [process.env.FRONTEND_URL, "http://localhost:5173", "http://127.0.0.1:5173"];
-const allowedOrigins = rawOrigins.map(url => url ? url.replace(/\/$/, "") : null).filter(Boolean);
+const allowedOrigins = rawOrigins.map(u => u ? u.replace(/\/$/, "") : null).filter(Boolean);
 
 app.use((req, res, next) => {
     const origin = req.headers.origin ? req.headers.origin.replace(/\/$/, "") : null;
@@ -50,7 +49,6 @@ app.use(helmet({
     },
 }));
 
-// Route Definitions
 app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/problems", problemRoutes);
@@ -60,6 +58,7 @@ app.use("/api/interview", interviewRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/roadmaps", roadmapRoutes);
 app.use("/api/community", communityRoutes);
+app.use("/api/ai", aiRoutes);
 
 app.get("/", (req, res) => res.send("RANBHOOMI API Operational ⚔️"));
 app.use(errorHandler);
