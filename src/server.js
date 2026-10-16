@@ -13,13 +13,13 @@ import contestRoutes from "./modules/contests/contest.routes.js";
 import interviewRoutes from "./modules/interview/interview.routes.js";
 import paymentRoutes from "./modules/payments/payment.routes.js";
 import roadmapRoutes from "./modules/roadmaps/roadmap.routes.js";
+import communityRoutes from "./modules/community/community.routes.js";
 import { razorpayWebhook } from "./modules/payments/payment.controller.js";
 
 const app = express();
 
 app.get('/api/health', (req, res) => res.status(200).send('Backend is awake'));
 
-// Webhook MUST be before express.json()
 app.post("/api/payment/webhook", express.raw({ type: "application/json" }), razorpayWebhook);
 
 app.use(express.json());
@@ -59,6 +59,7 @@ app.use("/api/contests", contestRoutes);
 app.use("/api/interview", interviewRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/roadmaps", roadmapRoutes);
+app.use("/api/community", communityRoutes);
 
 app.get("/", (req, res) => res.send("RANBHOOMI API Operational ⚔️"));
 app.use(errorHandler);
